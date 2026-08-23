@@ -12,6 +12,9 @@ export type { LedgerEntry, NewEntry, Verdict, VerifyResult } from './ledger.ts';
 export { freeze, thaw, listFrozen, verifyFrozen, manifestHash } from './frozens.ts';
 export type { AlignmentDraft, FrozenState, FilterSpec, FilterKind } from './frozens.ts';
 
+export { runCell } from './cellrunner.ts';
+export type { CellAdapter, CellCallInput, CellCallOutput, RunCellOptions, RunCellResult } from './cellrunner.ts';
+
 export { runNightCycle, renderReport, EARNED_KEEP_THRESHOLD } from './nightcycle.ts';
 export type { NightCycleReport, AlignmentStat, CellStat } from './nightcycle.ts';
 
