@@ -13,17 +13,17 @@ test('nightcycle streams a ledger into an earned-keep report', async () => {
   const file = path.join(dir, 'ledger.jsonl');
   const ledger = new Ledger(file);
 
-  // alignment A: mostly works — earns its keep
+  // alignment A: mostly works — earns its keep (each entry its own run)
   for (let i = 0; i < 8; i++) {
-    ledger.append({ cellId: 'cell.good', runId: 'r1', alignmentId: 'AAA', debit: { i }, credit: { i }, verdict: 'worked', escalated: false });
+    ledger.append({ cellId: 'cell.good', runId: `r1-${i}`, alignmentId: 'AAA', debit: { i }, credit: { i }, verdict: 'worked', escalated: false });
   }
-  ledger.append({ cellId: 'cell.good', runId: 'r1', alignmentId: 'AAA', debit: {}, credit: {}, verdict: 'failed', escalated: false });
+  ledger.append({ cellId: 'cell.good', runId: 'r1-f', alignmentId: 'AAA', debit: {}, credit: {}, verdict: 'failed', escalated: false });
 
   // alignment B: mostly fails — thaw candidate
   for (let i = 0; i < 3; i++) {
-    ledger.append({ cellId: 'cell.bad', runId: 'r2', alignmentId: 'BBB', debit: { i }, credit: {}, verdict: 'failed', escalated: i === 2 });
+    ledger.append({ cellId: 'cell.bad', runId: `r2-${i}`, alignmentId: 'BBB', debit: { i }, credit: {}, verdict: 'failed', escalated: i === 2 });
   }
-  ledger.append({ cellId: 'cell.bad', runId: 'r2', alignmentId: 'BBB', debit: {}, credit: {}, verdict: 'failed', escalated: true, note: 'requested the cowboy' });
+  ledger.append({ cellId: 'cell.bad', runId: 'r2-f', alignmentId: 'BBB', debit: {}, credit: {}, verdict: 'failed', escalated: true, note: 'requested the cowboy' });
 
   const report = await runNightCycle(file);
 
@@ -34,9 +34,11 @@ test('nightcycle streams a ledger into an earned-keep report', async () => {
 
   const a = report.alignments.find((x) => x.alignmentId === 'AAA');
   const b = report.alignments.find((x) => x.alignmentId === 'BBB');
-  assert.ok(a && a.earnedKeep, 'AAA (8/9) earns its keep');
-  assert.ok(b && !b.earnedKeep, 'BBB (0/4) is a thaw candidate');
-  assert.equal(a.keepRatio, 8 / 9);
+  assert.ok(a && a.earnedKeep, 'AAA (8 pass / 1 fail judgments) earns its keep');
+  assert.ok(b && !b.earnedKeep, 'BBB (half its runs produced no judgment) is a thaw candidate');
+  // v3: 8 worked + 1 judgment-fail = 9 judgments produced out of 9 final runs
+  assert.equal(a.keepRatio, 1);
+  assert.equal(a.judgmentPassRate, 8 / 9);
 
   // cells sorted worst-first by failure count
   const worst = report.cells[0];
@@ -72,18 +74,21 @@ test('nightcycle v2: suggested actions per alignment + cowboyNeeded mirrors esca
   const file = path.join(dir, 'ledger.jsonl');
   const ledger = new Ledger(file);
 
+  // every entry is its own run — outcome stats dedupe by (cellId, runId)
+  let run = 0;
   const append = (n: number, over: Partial<Parameters<Ledger['append']>[0]>) => {
     for (let i = 0; i < n; i++) {
       ledger.append({
-        cellId: 'cell.x', runId: 'r', alignmentId: 'AAA', debit: {}, credit: {},
+        cellId: 'cell.x', runId: `r-${run++}`, alignmentId: 'AAA', debit: {}, credit: {},
         verdict: 'worked', escalated: false, ...over,
       });
     }
   };
 
-  // THAW: below the keep-ratio threshold
+  // THAW: below the keep-ratio threshold — 3 worked + 3 execution errors
+  // (clean QC-fails would now COUNT as production under v3 semantics)
   append(3, { alignmentId: 'al.thaw.ratio' });
-  append(3, { alignmentId: 'al.thaw.ratio', verdict: 'failed' });
+  append(3, { alignmentId: 'al.thaw.ratio', verdict: 'failed', credit: { error: 'adapter error: timeout' } });
 
   // THAW: keep ratio fine (7/9 = 77.8%) but escalation-heavy (2/9 > 20%)
   append(7, { alignmentId: 'al.thaw.escalation' });
@@ -132,9 +137,186 @@ test('low-sample guard: even a bad alignment under 5 entries is kept', () => {
   const stat: AlignmentStat = {
     alignmentId: 'x', worked: 0, failed: 3, escalated: 3,
     keepRatio: 0, earnedKeep: false,
+    judgmentsProduced: 0, judgmentFails: 0, executionErrors: 3, escalations: 3,
+    judgmentPassRate: 0,
+    tokens: { prompt: 0, completion: 0, total: 0, estimated: 0 },
+    reportedTokenEntries: 0, estimatedTokenEntries: 0,
     suggestion: { action: 'keep', reason: 'placeholder' },
   };
   const s = suggestForAlignment(stat);
   assert.equal(s.action, 'keep');
   assert.equal(s.reason, 'insufficient data');
+});
+
+// ---------------------------------------------------------------------------
+// v3: earned-keep measures the ALIGNMENT's production, not the bank's quality
+// ---------------------------------------------------------------------------
+
+test('v3 earned-keep: a strict judge earns its keep even when subjects fail', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-night-'));
+  const file = path.join(dir, 'ledger.jsonl');
+  const ledger = new Ledger(file);
+
+  // 6 passing judgments + 4 clean QC-fail judgments + 0 errors.
+  // Today's (pre-v3) code would compute keepRatio 0.6 and wrongly thaw it.
+  for (let i = 0; i < 6; i++) {
+    ledger.append({ cellId: 'qc', runId: `w-${i}`, alignmentId: 'judge-1', debit: {}, credit: { pass: true }, verdict: 'worked', verdictKind: 'worked', escalated: false });
+  }
+  for (let i = 0; i < 4; i++) {
+    ledger.append({ cellId: 'qc', runId: `f-${i}`, alignmentId: 'judge-1', debit: {}, credit: { pass: false, reason: 'out of voice' }, verdict: 'failed', verdictKind: 'judgment-fail', escalated: false });
+  }
+
+  const report = await runNightCycle(file);
+  const a = report.alignments.find((x) => x.alignmentId === 'judge-1');
+  assert.ok(a, 'judge-1 present');
+  assert.equal(a.judgmentsProduced, 10);
+  assert.equal(a.judgmentFails, 4);
+  assert.equal(a.executionErrors, 0);
+  assert.equal(a.keepRatio, 1.0, 'all runs produced a judgment');
+  assert.ok(a.earnedKeep, 'a judge that cleanly fails bad lines is doing its job');
+  assert.equal(a.judgmentPassRate, 0.6, 'the bank itself passed 60%');
+  assert.equal(a.failed, 4, 'back-compat failed = judgmentFails + errors + escalations');
+  assert.equal(a.worked + a.failed, 10, 'old report shape still adds up');
+  assert.equal(a.suggestion.action, 'keep');
+  // the report surfaces both metrics
+  const md = renderReport(report);
+  assert.match(md, /subject pass rate/i);
+  assert.match(md, /60\.0%/);
+});
+
+test('v3 retries deduped: last entry of a run decides its outcome', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-night-'));
+  const file = path.join(dir, 'ledger.jsonl');
+  const ledger = new Ledger(file);
+
+  // one run, two entries: execution-error then a worked retry → outcome worked
+  ledger.append({ cellId: 'qc', runId: 'r-1', alignmentId: 'judge-1', debit: {}, credit: { error: 'adapter error: connection reset', usage: { promptTokens: 100, completionTokens: 0, totalTokens: 100, estimated: true } }, verdict: 'failed', verdictKind: 'execution-error', escalated: false });
+  ledger.append({ cellId: 'qc', runId: 'r-1', alignmentId: 'judge-1', debit: {}, credit: { pass: true, usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, estimated: false } }, verdict: 'worked', verdictKind: 'worked', escalated: false, retryOf: 1 });
+  // a second, distinct run that stayed an execution-error
+  ledger.append({ cellId: 'qc', runId: 'r-2', alignmentId: 'judge-1', debit: {}, credit: { error: 'parse failed: oops' }, verdict: 'failed', verdictKind: 'execution-error', escalated: false });
+
+  const report = await runNightCycle(file);
+  const a = report.alignments.find((x) => x.alignmentId === 'judge-1');
+  assert.ok(a);
+  assert.equal(a.judgmentsProduced, 1, 'the retried run counts once, as worked');
+  assert.equal(a.worked, 1);
+  assert.equal(a.executionErrors, 1, 'r-2 stayed an error');
+  assert.equal(a.keepRatio, 1 / 2);
+  // token cost sums over EVERY entry — the retried attempt still cost tokens
+  assert.equal(a.tokens.prompt, 200);
+  assert.equal(a.tokens.completion, 50);
+  assert.equal(a.tokens.total, 250);
+  assert.equal(a.tokens.estimated, 100, 'only the estimated entry counts as estimated tokens');
+  assert.equal(a.estimatedTokenEntries, 1);
+  assert.equal(a.reportedTokenEntries, 1, 'r-2 has no usage: neither bucket');
+  assert.equal(report.entries, 3, 'raw entry count unchanged');
+});
+
+test('v3 legacy ledger (no verdictKind) classifies via resolveVerdictKind', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-night-'));
+  const file = path.join(dir, 'ledger.jsonl');
+  const ledger = new Ledger(file);
+
+  // old core cellrunner string credits
+  ledger.append({ cellId: 'c', runId: 'r1', alignmentId: 'legacy', debit: {}, credit: 'parse failed: not json', verdict: 'failed', escalated: false });
+  ledger.append({ cellId: 'c', runId: 'r2', alignmentId: 'legacy', debit: {}, credit: 'adapter error: timeout', verdict: 'failed', escalated: false });
+  // field-trial style error object
+  ledger.append({ cellId: 'c', runId: 'r3', alignmentId: 'legacy', debit: {}, credit: { error: 'boom' }, verdict: 'failed', escalated: false });
+  // clean credits: real judgments
+  ledger.append({ cellId: 'c', runId: 'r4', alignmentId: 'legacy', debit: {}, credit: { pass: true }, verdict: 'worked', escalated: false });
+  ledger.append({ cellId: 'c', runId: 'r5', alignmentId: 'legacy', debit: {}, credit: { pass: false }, verdict: 'failed', escalated: false });
+  // give-up
+  ledger.append({ cellId: 'c', runId: 'r6', alignmentId: 'legacy', debit: {}, credit: { error: 'gave up' }, verdict: 'failed', escalated: true });
+
+  const report = await runNightCycle(file);
+  const a = report.alignments.find((x) => x.alignmentId === 'legacy');
+  assert.ok(a);
+  assert.equal(a.executionErrors, 3, 'string-prefix and {error} credits are execution errors');
+  assert.equal(a.judgmentFails, 1, 'clean failed credit is a completed judgment');
+  assert.equal(a.worked, 1);
+  assert.equal(a.escalations, 1, 'escalated entry wins regardless of credit');
+  assert.equal(a.judgmentsProduced, 2);
+  assert.equal(a.keepRatio, 2 / 6);
+  const v = await ledger.verify();
+  assert.ok(v.ok, 'legacy ledger still verifies');
+});
+
+test('v3 token aggregation per alignment, reported vs estimated flagged', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-night-'));
+  const file = path.join(dir, 'ledger.jsonl');
+  const ledger = new Ledger(file);
+
+  const usage = (p: number, c: number, estimated: boolean) => ({ promptTokens: p, completionTokens: c, totalTokens: p + c, estimated });
+  ledger.append({ cellId: 'c', runId: 'r1', alignmentId: 'al.tok', debit: {}, credit: { pass: true, usage: usage(100, 40, false) }, verdict: 'worked', verdictKind: 'worked', escalated: false });
+  ledger.append({ cellId: 'c', runId: 'r2', alignmentId: 'al.tok', debit: {}, credit: { pass: true, usage: usage(200, 60, true) }, verdict: 'worked', verdictKind: 'worked', escalated: false });
+  ledger.append({ cellId: 'c', runId: 'r3', alignmentId: 'al.tok', debit: {}, credit: { pass: true }, verdict: 'worked', verdictKind: 'worked', escalated: false }); // no usage → 0s
+  // a different alignment keeps separate books
+  ledger.append({ cellId: 'c', runId: 'r4', alignmentId: 'al.other', debit: {}, credit: { pass: true, usage: usage(10, 5, false) }, verdict: 'worked', verdictKind: 'worked', escalated: false });
+
+  const report = await runNightCycle(file);
+  const a = report.alignments.find((x) => x.alignmentId === 'al.tok');
+  const other = report.alignments.find((x) => x.alignmentId === 'al.other');
+  assert.ok(a && other);
+  assert.deepEqual(a.tokens, { prompt: 300, completion: 100, total: 400, estimated: 260 });
+  assert.equal(a.reportedTokenEntries, 1);
+  assert.equal(a.estimatedTokenEntries, 1);
+  assert.equal(other.tokens.total, 15);
+
+  const md = renderReport(report);
+  assert.match(md, /## Cost per alignment/);
+  assert.match(md, /\| `al\.tok` \| 300 \| 100 \| 400 \| 65\.0% \|/);
+});
+
+test('nightcycle honors earnedKeepMetric declared in the frozen state (gap 2)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-night-'));
+  const file = path.join(dir, 'ledger.jsonl');
+  const frozens = path.join(dir, 'frozens');
+  fs.mkdirSync(frozens);
+  const ledger = new Ledger(file);
+
+  const { freeze } = await import('../src/frozens.ts');
+  const draft: import('../src/frozens.ts').AlignmentDraft = {
+    id: 'actor-cell', model: 'm', useCase: 'u', prompt: 'p',
+    inputFilters: [], outputFilters: [], params: {}, directiveChunks: [],
+    earnedKeepMetric: 'task-approval',
+  };
+  const frozen = freeze(frozens, draft);
+
+  // ACTOR alignment declares task-approval: it earns its keep by SUCCEEDING,
+  // not by producing judgments. 3 worked / 6 failed judgments = 0.333 approval → thaw.
+  // (Under the default 'production' metric these 9 finals all parse fine and
+  // it would look healthy — that was the gap-2 bug.)
+  for (let i = 0; i < 3; i++) {
+    ledger.append({ cellId: 'actor', runId: `a-${i}`, alignmentId: frozen.alignmentId, debit: {}, credit: {}, verdict: 'worked', escalated: false });
+  }
+  for (let i = 0; i < 6; i++) {
+    ledger.append({ cellId: 'actor', runId: `f-${i}`, alignmentId: frozen.alignmentId, debit: {}, credit: {}, verdict: 'failed', escalated: false });
+  }
+
+
+  // without frozenDir: default production metric, no declaration surfaced
+  const plain = await runNightCycle(file);
+  const plainStat = plain.alignments.find((x) => x.alignmentId === frozen.alignmentId)!;
+  assert.equal(plainStat.earnedKeepMetric, 'production');
+  assert.ok(plainStat.earnedKeep, 'production metric: judgments produced on every final run');
+
+  // with frozenDir: the declared task-approval metric rules
+  const report = await runNightCycle(file, { frozenDir: frozens });
+  const stat = report.alignments.find((x) => x.alignmentId === frozen.alignmentId)!;
+  assert.equal(stat.earnedKeepMetric, 'task-approval');
+  assert.ok(stat.approvalRatio !== undefined && Math.abs(stat.approvalRatio - 3 / 9) < 1e-9);
+  assert.ok(!stat.earnedKeep, 'task-approval at 50% does not earn its keep');
+  assert.equal(stat.suggestion.action, 'thaw');
+  assert.match(stat.suggestion.reason, /task-approval/);
+
+  // suggestForAlignment branch direct: a declared task-approval stat with a
+  // failing approval ratio thaws even though keepRatio is perfect
+  const thawed = suggestForAlignment({
+    alignmentId: 'X', worked: 3, failed: 6, escalated: 0,
+    keepRatio: 1, approvalRatio: 0.5, earnedKeepMetric: 'task-approval',
+    earnedKeep: false, suggestion: { action: 'keep', reason: '' },
+    judgmentsProduced: 9, judgmentFails: 6, executionErrors: 0, escalations: 0,
+    judgmentPassRate: 0.5, tokens: { prompt: 0, completion: 0, total: 0, estimated: 0 }, reportedTokenEntries: 0, estimatedTokenEntries: 0,
+  });
+  assert.equal(thawed.action, 'thaw');
 });

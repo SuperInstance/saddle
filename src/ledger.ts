@@ -28,6 +28,26 @@ import { hashValue } from './hash.ts';
 
 export type Verdict = 'worked' | 'failed';
 
+/**
+ * v3 verdict semantics — the old `verdict: 'failed'` was overloaded: it meant
+ * both "the line failed QC" (a SUCCESSFUL judgment) and "the cell failed to
+ * judge". The kinds split those explicitly:
+ *
+ *   worked          — the cell produced a passing judgment/output
+ *   judgment-fail   — the cell produced a REAL judgment and the judgment was
+ *                     a fail. A completed judgment: never retried, never
+ *                     escalated. Retrying it would double-spend the run.
+ *   execution-error — the cell failed to produce anything (adapter threw,
+ *                     output unparseable). Retryable.
+ *   escalated       — execution errors exhausted maxAttempts; the cell gave
+ *                     up and the cowboy must look.
+ *
+ * Legacy fields (`verdict`, `escalated`) stay and stay consistent for old
+ * readers: worked→worked/false; judgment-fail→failed/false;
+ * execution-error→failed/false (retryable); escalated→failed/true.
+ */
+export type VerdictKind = 'worked' | 'judgment-fail' | 'execution-error' | 'escalated';
+
 export interface LedgerEntry {
   seq: number;
   ts: string;
@@ -40,6 +60,12 @@ export interface LedgerEntry {
   credit: string;
   verdict: Verdict;
   escalated: boolean;
+  /**
+   * v3 explicit outcome kind. OPTIONAL so pre-v3 ledgers still parse and still
+   * hash-verify (the field is simply absent there); new entries always carry
+   * it, and it participates in the entry hash like every other field.
+   */
+  verdictKind?: VerdictKind;
   note?: string;
   /** seq of the entry this one retried; retries are new entries, never rewrites */
   retryOf?: number;
@@ -60,6 +86,8 @@ export interface NewEntry {
   credit: unknown;
   verdict: Verdict;
   escalated: boolean;
+  /** v3 outcome kind; omit only when writing legacy-shape entries on purpose */
+  verdictKind?: VerdictKind;
   note?: string;
   retryOf?: number;
 }
@@ -75,6 +103,41 @@ export interface VerifyResult {
 export function entryHash(entry: Omit<LedgerEntry, 'hash'>): string {
   const { hash: _ignored, ...rest } = entry as LedgerEntry;
   return hashValue(rest);
+}
+
+/**
+ * Migration reader: derive the v3 VerdictKind for any entry, including the
+ * pre-v3 ledgers that predate the field. New entries return their stamped
+ * `verdictKind` as-is; legacy entries are classified by what the old writers
+ * actually put in the books:
+ *
+ *   escalated                  → 'escalated'  (give-up always marked itself)
+ *   verdict 'worked'           → 'worked'
+ *   verdict 'failed'           → 'execution-error' when the credit is/contains
+ *     an error — a credit OBJECT with an `error` key (field-trial style) or a
+ *     STRING credit starting `parse failed:` / `adapter error:` (the old core
+ *     cellrunner wrote those) — else 'judgment-fail' (a clean credit under a
+ *     failed verdict is a completed QC judgment).
+ */
+export function resolveVerdictKind(entry: LedgerEntry): VerdictKind {
+  if (entry.verdictKind !== undefined) return entry.verdictKind;
+  if (entry.escalated) return 'escalated';
+  if (entry.verdict === 'worked') return 'worked';
+  // verdict 'failed', not escalated: the credit decides judgment vs error
+  let credit: unknown;
+  try {
+    credit = JSON.parse(entry.credit);
+  } catch {
+    return 'judgment-fail'; // unreadable credit carries no error signature we know
+  }
+  if (typeof credit === 'string') {
+    if (credit.startsWith('parse failed:') || credit.startsWith('adapter error:')) return 'execution-error';
+    return 'judgment-fail';
+  }
+  if (credit !== null && typeof credit === 'object' && !Array.isArray(credit) && 'error' in credit) {
+    return 'execution-error';
+  }
+  return 'judgment-fail';
 }
 
 const TAIL_WINDOW = 64 * 1024; // bytes to inspect from the end for O(1) tail
@@ -99,6 +162,7 @@ export class Ledger {
       credit: JSON.stringify(input.credit ?? null),
       verdict: input.verdict,
       escalated: input.escalated,
+      ...(input.verdictKind !== undefined ? { verdictKind: input.verdictKind } : {}),
       ...(input.note !== undefined ? { note: input.note } : {}),
       ...(input.retryOf !== undefined ? { retryOf: input.retryOf } : {}),
       prevHash: last ? last.hash : '',

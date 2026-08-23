@@ -2,8 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import test from 'node:test';
 import * as assert from 'node:assert';
-import { runCell, type CellAdapter } from '../src/cellrunner.ts';
+import { runCell, estimateUsage, type CellAdapter } from '../src/cellrunner.ts';
 import { Ledger, type Verdict } from '../src/ledger.ts';
+import { resolveVerdictKind } from '../src/ledger.ts';
 import { freeze, type FrozenState } from '../src/frozens.ts';
 
 // Test fixtures
@@ -312,4 +313,230 @@ test('cellrunner: adapter transport error is caught and retried', async () => {
   } finally {
     cleanup(tmpDir);
   }
+});
+
+// ---------------------------------------------------------------------------
+// v3: verdict semantics split (field-trial-1 gap 1) + token accounting (gap 3)
+// ---------------------------------------------------------------------------
+
+test('cellrunner v3: a parseable-but-failing credit is a FINAL judgment — one entry, never retried, never escalated', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    let calls = 0;
+    const adapter: CellAdapter = {
+      name: 'mock',
+      async call() {
+        calls++;
+        return { raw: JSON.stringify({ pass: false, reason: 'out of voice' }), latencyMs: 5 };
+      },
+    };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: { line: 'hello' },
+      buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => {
+        const parsed = JSON.parse(raw);
+        return { credit: parsed, verdict: (parsed.pass ? 'worked' : 'failed') as Verdict };
+      },
+      ledger, adapter, maxAttempts: 3,
+    });
+
+    assert.strictEqual(calls, 1, 'a QC-fail judgment is final — the adapter is called exactly once');
+    assert.strictEqual(result.entries.length, 1, 'exactly ONE entry consumed');
+    assert.strictEqual(result.final.verdict, 'failed', 'legacy verdict stays failed');
+    assert.strictEqual(result.final.verdictKind, 'judgment-fail');
+    assert.strictEqual(result.final.escalated, false, 'a completed judgment NEVER escalates');
+
+    // the judgment credit carries latency + attempts + usage stamps
+    const credit = JSON.parse(result.final.credit);
+    assert.strictEqual(credit.pass, false);
+    assert.strictEqual(credit.reason, 'out of voice');
+    assert.equal(typeof credit.latencyMs, 'number');
+    assert.strictEqual(credit.attempts, 1);
+    assert.ok(credit.usage && typeof credit.usage.totalTokens === 'number');
+
+    assert.ok(await ledger.verify().then((v) => v.ok));
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v3: an unparseable credit is an execution-error — retried, then escalated', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    const adapter: CellAdapter = {
+      name: 'mock',
+      async call() { return { raw: 'garbage', latencyMs: 5 }; },
+    };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => { JSON.parse(raw); return { credit: {}, verdict: 'worked' }; },
+      ledger, adapter, maxAttempts: 2,
+    });
+
+    assert.strictEqual(result.entries.length, 2);
+    assert.strictEqual(result.entries[0]!.verdictKind, 'execution-error');
+    assert.strictEqual(result.entries[0]!.escalated, false);
+    assert.strictEqual(result.entries[1]!.verdictKind, 'escalated', 'exhausted attempts give up');
+    assert.strictEqual(result.entries[1]!.escalated, true);
+    assert.strictEqual(result.entries[1]!.verdict, 'failed');
+    assert.match(result.entries[1]!.note ?? '', /^gave up:/);
+
+    // error credits carry usage too (estimated from prompt + raw)
+    const credit = JSON.parse(result.entries[1]!.credit);
+    assert.ok(credit.error, 'error credit carries the error');
+    assert.ok(credit.usage && credit.usage.estimated === true);
+    assert.ok(credit.usage.completionTokens > 0, 'raw output exists, so completion tokens are counted');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v3: a transport error is an execution-error — retried, then escalated', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    const adapter: CellAdapter = {
+      name: 'mock',
+      async call() { throw new Error('network timeout'); },
+    };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: () => ({ credit: {}, verdict: 'worked' }),
+      ledger, adapter, maxAttempts: 2,
+    });
+
+    assert.strictEqual(result.entries.length, 2);
+    assert.strictEqual(result.entries[0]!.verdictKind, 'execution-error');
+    assert.strictEqual(result.entries[1]!.verdictKind, 'escalated');
+    assert.strictEqual(result.entries[1]!.escalated, true);
+
+    // transport error: no raw output → prompt-side estimate only, completion 0
+    const credit = JSON.parse(result.entries[1]!.credit);
+    assert.ok(credit.error);
+    assert.strictEqual(credit.usage.estimated, true);
+    assert.strictEqual(credit.usage.completionTokens, 0);
+    assert.ok(credit.usage.promptTokens > 0);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v3: adapter-reported usage beats the estimate (estimated: false)', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    const adapter: CellAdapter = {
+      name: 'mock',
+      async call() {
+        return {
+          raw: JSON.stringify({ pass: true }),
+          latencyMs: 7,
+          usage: { promptTokens: 111, completionTokens: 22, totalTokens: 133, estimated: true },
+        };
+      },
+    };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => ({ credit: JSON.parse(raw), verdict: 'worked' }),
+      ledger, adapter,
+    });
+
+    const credit = JSON.parse(result.final.credit);
+    assert.deepStrictEqual(credit.usage, { promptTokens: 111, completionTokens: 22, totalTokens: 133, estimated: false });
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v3: no adapter usage → chars/4 estimate stamped on every credit', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    const raw = JSON.stringify({ pass: true });
+    const adapter: CellAdapter = { name: 'mock', async call() { return { raw, latencyMs: 7 }; } };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: (input) => `judge ${JSON.stringify(input)}`,
+      parseCredit: (r) => ({ credit: JSON.parse(r), verdict: 'worked' }),
+      ledger, adapter,
+    });
+
+    const debit = JSON.parse(result.final.debit);
+    const credit = JSON.parse(result.final.credit);
+    assert.deepStrictEqual(
+      credit.usage,
+      estimateUsage(debit.prompt, raw),
+      'the credit carries exactly the chars/4 estimate over the real prompt+raw'
+    );
+    assert.strictEqual(credit.usage.estimated, true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v3: ledger mixes legacy and verdictKind entries and still verifies', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    // a legacy-shape entry (no verdictKind) followed by a v3 run
+    ledger.append({ cellId: 'qc', runId: 'old', alignmentId: frozen.alignmentId, debit: {}, credit: { pass: true }, verdict: 'worked', escalated: false });
+
+    const adapter: CellAdapter = { name: 'mock', async call() { return { raw: JSON.stringify({ pass: false }), latencyMs: 3 }; } };
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'new',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => ({ credit: JSON.parse(raw), verdict: 'failed' }),
+      ledger, adapter,
+    });
+
+    assert.strictEqual(resolveVerdictKind(result.final), 'judgment-fail');
+    const v = await ledger.verify();
+    assert.strictEqual(v.ok, true, 'mixed legacy + v3 entries hash-verify end to end');
+    assert.strictEqual(v.checked, 2);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('estimateUsage: chars/4 per side, ceiled, summed', () => {
+  const prompt = { system: 'a'.repeat(100), user: 'b'.repeat(50) };
+  const u = estimateUsage(prompt, 'c'.repeat(61));
+  assert.deepStrictEqual(u, {
+    promptTokens: Math.ceil(150 / 4),
+    completionTokens: Math.ceil(61 / 4),
+    totalTokens: Math.ceil(150 / 4) + Math.ceil(61 / 4),
+    estimated: true,
+  });
+  // empty raw → completion side 0 (the transport-error estimate)
+  assert.equal(estimateUsage(prompt, '').completionTokens, 0);
+  assert.equal(estimateUsage(prompt, '').promptTokens, 38);
 });

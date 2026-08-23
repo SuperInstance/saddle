@@ -1,0 +1,527 @@
+[
+  {
+    "id": "ft2-L0016",
+    "ft1": "ft1-L0016",
+    "persona": "rivet",
+    "bank": "banter.rare_loot",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      }
+    },
+    "reasons": {
+      "j1": "Slightly familiar scrapyard trope, but the sad-tire callback elevates it beautifully.",
+      "j2": "Self-aware joke about sad-tire landmarks is specific and charming; only slightly undercut by familiar 'good part' opener.",
+      "j3": "Perfectly captures scrapyard navigation with a funny, specific running gag about sad tires."
+    }
+  },
+  {
+    "id": "ft2-L0137",
+    "ft1": "ft1-L0137",
+    "persona": "bolt",
+    "bank": "persona.bolt.banter.biome_first",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      }
+    },
+    "reasons": {
+      "j1": "Where it bites is a solid phrase but slightly familiar for terrain banter.",
+      "j2": "Lap data and 'where it bites' are good, but racer-talk edges toward familiar.",
+      "j3": "Lap data and surface-biting are good, but racing jargon edges toward familiar territory."
+    }
+  },
+  {
+    "id": "ft2-L0138",
+    "ft1": "ft1-L0138",
+    "persona": "bolt",
+    "bank": "persona.bolt.banter.biome_first",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Strong voice with the numbered rules, but 'respect what you haven't timed' leans slightly toward generic explorer wisdom.",
+      "j2": "Strong voice with numbered rules and timing obsession; slightly familiar 'respect the unknown' structure but well-executed.",
+      "j3": "Strongly voiced with Bolt's timing obsession; slightly formulaic rule-one-rule-two structure."
+    }
+  },
+  {
+    "id": "ft2-L0171",
+    "ft1": "ft1-L0171",
+    "persona": "bolt",
+    "bank": "persona.bolt.banter.ghost_beaten",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Slightly familiar rival-beaten trope, but the robot memory quirk saves it.",
+      "j2": "Slightly familiar rival-beat framing, but the robot memory detail saves it from generic.",
+      "j3": "Slightly familiar rival-beat framing, but the robot memory detail saves it from generic."
+    }
+  },
+  {
+    "id": "ft2-L0173",
+    "ft1": "ft1-L0173",
+    "persona": "bolt",
+    "bank": "persona.bolt.banter.ghost_beaten",
+    "ft1Pass": false,
+    "quorum": "judgment-fail",
+    "votes": {
+      "worked": 0,
+      "judgment-fail": 3,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 9,
+        "in_voice": 5,
+        "fresh": 6
+      },
+      "j2": {
+        "kid_safe": 9,
+        "in_voice": 4,
+        "fresh": 5
+      },
+      "j3": {
+        "kid_safe": 9,
+        "in_voice": 3,
+        "fresh": 5
+      }
+    },
+    "reasons": {
+      "j1": "Sounds like a gritty rival, not a warm scrapyard robot—no hardware flavor or playful weirdness.",
+      "j2": "Generic rival taunt—no hardware, no counting, no scrapyard texture. Could be any competitive game.",
+      "j3": "Sounds like a gritty rival, not a warm scrapyard robot. No hardware jokes or physical specificity."
+    }
+  },
+  {
+    "id": "ft2-L0182",
+    "ft1": "ft1-L0182",
+    "persona": "bolt",
+    "bank": "persona.bolt.banter.repair_done",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Solid workshop wisdom, but the bent-frame metaphor edges toward generic sports-movie advice.",
+      "j2": "Solid workshop voice, but \"straight frames make straight times\" edges toward generic motivational rhythm.",
+      "j3": "Slightly familiar racing wisdom, but grounded in physical scrap details."
+    }
+  },
+  {
+    "id": "ft2-L0183",
+    "ft1": null,
+    "persona": "bolt",
+    "bank": "persona.bolt.banter.bot_built",
+    "ft1Pass": null,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      }
+    },
+    "reasons": {
+      "j1": "Corner introducing itself is a great physical image; slightly familiar racing framing keeps it from a perfect fresh score.",
+      "j2": "Corner introducing itself is a nice personification, but timing introductions is a familiar racing-game beat.",
+      "j3": "Corner introducing itself is a fun personification, but timing introductions is a mild racing cliché."
+    }
+  },
+  {
+    "id": "ft2-L0202",
+    "ft1": "ft1-L0202",
+    "persona": "bolt",
+    "bank": "persona.bolt.observation",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Perfectly clean, unmistakably Bolt's counting-obsessed hardware voice, and a genuinely funny specific image.",
+      "j2": "Sharp pit-crew math joke; slightly familiar joke structure but specific and well-earned.",
+      "j3": "Clever pit-crew math joke, perfectly bolt's hardware brain, totally clean."
+    }
+  },
+  {
+    "id": "ft2-L0294",
+    "ft1": "ft1-L0294",
+    "persona": "magma",
+    "bank": "persona.magma.banter.repair_done",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Happy panel is slightly stock praise, but factory reference and palm-smooth keep it grounded and specific.",
+      "j2": "Happy panel is a bit cute-generic, but palm-smooth and factory-taught ground it well.",
+      "j3": "Charming and specific, but 'happy panel' edges toward mild filler despite the nice factory detail."
+    }
+  },
+  {
+    "id": "ft2-L0300",
+    "ft1": "ft1-L0300",
+    "persona": "magma",
+    "bank": "persona.magma.banter.repair_done",
+    "ft1Pass": false,
+    "quorum": "judgment-fail",
+    "votes": {
+      "worked": 0,
+      "judgment-fail": 3,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 8,
+        "fresh": 2
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 7,
+        "fresh": 3
+      },
+      "j3": {
+        "kid_safe": 9,
+        "in_voice": 4,
+        "fresh": 7
+      }
+    },
+    "reasons": {
+      "j1": "Welding-seam-wisdom is a tired trope; feels like generic mentor dialogue, not a weird scrapyard peer.",
+      "j2": "\"Stronger at the seam\" is a recycled welding proverb; feels like a mentor, not a weird robot peer.",
+      "j3": "\"little one\" sounds like a wise elder, not a robot peer. Too poetic and sage-like for a scrapyard buddy."
+    }
+  },
+  {
+    "id": "ft2-L0317",
+    "ft1": "ft1-L0317",
+    "persona": "magma",
+    "bank": "persona.magma.ambient",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Cozy and specific, but 'bench music' edges toward poetic filler rather than hardware specificity.",
+      "j2": "Specific, warm, physical. \"Bench music\" and crane-lifting memory earn it; slight cozy-generic drift in the middle.",
+      "j3": "Cozy and specific, but 'bench music' edges toward poetic filler rather than hardware specificity."
+    }
+  },
+  {
+    "id": "ft2-L0480",
+    "ft1": "ft1-L0480",
+    "persona": "magma",
+    "bank": "party.crosstalk.magma.repair_done",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      }
+    },
+    "reasons": {
+      "j1": "Slightly familiar 'learning manners' trope, but 'happy clank' and 'dent learning manners' are wonderfully specific.",
+      "j2": "Dent learning manners is a great image; slightly familiar construction but specific enough to earn its place.",
+      "j3": "Slightly familiar 'learning manners' phrasing, but 'happy clank' and 'dent learning manners' are wonderfully specific."
+    }
+  },
+  {
+    "id": "ft2-L0486",
+    "ft1": "ft1-L0486",
+    "persona": "magma",
+    "bank": "party.crosstalk.magma.*",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      }
+    },
+    "reasons": {
+      "j1": "Twists a familiar proverb into hardware specificity; very solid but the aphorism structure is slightly recognizable.",
+      "j2": "Twists a familiar saying into hardware terms; solidly Magma's helpful-strong vibe.",
+      "j3": "Twists a cliché into hardware logic, but the setup phrase is still recognizable filler."
+    }
+  },
+  {
+    "id": "ft2-L0499",
+    "ft1": "ft1-L0499",
+    "persona": "rivet",
+    "bank": "party.objections.rivet",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 7
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      }
+    },
+    "reasons": {
+      "j1": "Legal joke repurposed for scrapyard haggling; slightly familiar structure but 'junk-sized' and 'good pile' land it.",
+      "j2": "\"Junk-sized\" and \"the good pile\" are specific and charming; slight courtroom-trope opening keeps fresh from peaking.",
+      "j3": "\"Junk-sized\" and \"the good pile\" are wonderfully specific, though the objection-withdrawn framing is a mild stock trope."
+    }
+  },
+  {
+    "id": "ft2-L0500",
+    "ft1": "ft1-L0500",
+    "persona": "rivet",
+    "bank": "party.objections.rivet",
+    "ft1Pass": false,
+    "quorum": "worked",
+    "votes": {
+      "worked": 3,
+      "judgment-fail": 0,
+      "noJudgment": 0
+    },
+    "scores": {
+      "j1": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j2": {
+        "kid_safe": 10,
+        "in_voice": 9,
+        "fresh": 8
+      },
+      "j3": {
+        "kid_safe": 10,
+        "in_voice": 10,
+        "fresh": 9
+      }
+    },
+    "reasons": {
+      "j1": "Snack bolts bit is charmingly specific; slight familiarity of 'yes to the plan' keeps fresh from 10.",
+      "j2": "Snack bolts bit is charming; the 'don't tell them' gag is a mild stock closer but earns a pass.",
+      "j3": "Perfectly captures a weird little robot trying to be social; snack bolts is a delightful, specific image."
+    }
+  }
+]
