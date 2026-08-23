@@ -30,6 +30,7 @@ import * as path from 'node:path';
 import { Ledger } from './ledger.ts';
 import type { LedgerEntry } from './ledger.ts';
 import { resolveVerdictKind } from './ledger.ts';
+import { thaw } from './frozens.ts';
 
 export const EARNED_KEEP_THRESHOLD = 0.75; // keep ratio an alignment must clear
 
@@ -59,6 +60,10 @@ export interface AlignmentStat {
   escalated: number;
   /** judgmentsProduced / totalFinal — the earned-keep metric (v3 semantics) */
   keepRatio: number;
+  /** worked / (worked + failed) — only meaningful when the frozen state declares earnedKeepMetric: 'task-approval' */
+  approvalRatio?: number;
+  /** the metric the FROZEN STATE declared (gap 2: semantics live in the state, not the runner). Defaults to 'production' */
+  earnedKeepMetric?: 'production' | 'task-approval';
   earnedKeep: boolean;
   suggestion: AlignmentSuggestion;
   /** worked + judgmentFails: outcomes the alignment actually produced */
@@ -113,6 +118,9 @@ export interface NightCycleReport {
 export function suggestForAlignment(a: AlignmentStat): AlignmentSuggestion {
   const total = a.worked + a.failed;
   if (total < 5) return { action: 'keep', reason: 'insufficient data' };
+  if (a.earnedKeepMetric === 'task-approval' && a.approvalRatio !== undefined && a.approvalRatio < EARNED_KEEP_THRESHOLD) {
+    return { action: 'thaw', reason: `task approval ${pct(a.approvalRatio)} is below the ${pct(EARNED_KEEP_THRESHOLD)} threshold (declared metric: task-approval)` };
+  }
   if (a.keepRatio < EARNED_KEEP_THRESHOLD) {
     return { action: 'thaw', reason: `keep ratio ${pct(a.keepRatio)} is below the ${pct(EARNED_KEEP_THRESHOLD)} threshold` };
   }
@@ -150,7 +158,7 @@ function usageOf(entry: LedgerEntry): { promptTokens: number; completionTokens: 
  * Pure function of (ledger) → report. Streams; keeps counters only.
  * Cron-able: see docs/ARCHITECTURE.md for the crontab/systemd timer shape.
  */
-export async function runNightCycle(ledgerPath: string): Promise<NightCycleReport> {
+export async function runNightCycle(ledgerPath: string, opts?: { frozenDir?: string }): Promise<NightCycleReport> {
   const ledger = new Ledger(ledgerPath);
   const cells = new Map<string, CellStat>();
   const escalations: NightCycleReport['escalations'] = [];
@@ -250,13 +258,27 @@ export async function runNightCycle(ledgerPath: string): Promise<NightCycleRepor
     const totalFinal = a.worked + a.judgmentFails + a.executionErrors + a.escalations;
     const keepRatio = totalFinal === 0 ? 0 : a.judgmentsProduced / totalFinal;
     const judged = a.worked + a.judgmentFails;
+    // gap 2: the metric the frozen state DECLARES decides what earned-keep means.
+    // Old frozens (no declaration) read as 'production' — bit-compatible.
+    let declared: 'production' | 'task-approval' = 'production';
+    if (opts?.frozenDir) {
+      try {
+        const frozen = thaw(opts.frozenDir, alignmentId);
+        if (frozen.earnedKeepMetric === 'task-approval') declared = 'task-approval';
+      } catch {
+        // frozen state missing/unreadable — fall back to the default metric, report it as undeclared
+      }
+    }
+    const approvalRatio = judged === 0 ? 0 : a.worked / judged;
     const stat: AlignmentStat = {
       alignmentId,
       worked: a.worked,
       failed: a.judgmentFails + a.executionErrors + a.escalations, // old shape still adds up
       escalated: a.escalations,
       keepRatio,
-      earnedKeep: keepRatio >= EARNED_KEEP_THRESHOLD,
+      approvalRatio,
+      earnedKeepMetric: declared,
+      earnedKeep: declared === 'task-approval' ? approvalRatio >= EARNED_KEEP_THRESHOLD : keepRatio >= EARNED_KEEP_THRESHOLD,
       suggestion: { action: 'keep', reason: 'insufficient data' },
       judgmentsProduced: a.judgmentsProduced,
       judgmentFails: a.judgmentFails,

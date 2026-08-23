@@ -1,0 +1,26 @@
+{
+  "ts": "2026-08-23T20:42:23.611Z",
+  "lines": 15,
+  "worked": 13,
+  "judgmentFail": 2,
+  "hung": 0,
+  "passRate": 0.867,
+  "dissentSeen": false,
+  "tokensPerJudge": {
+    "j1-original": {
+      "prompt": 6669,
+      "completion": 919,
+      "calls": 15
+    },
+    "j2-editor": {
+      "prompt": 7314,
+      "completion": 923,
+      "calls": 15
+    },
+    "j3-kid": {
+      "prompt": 7524,
+      "completion": 900,
+      "calls": 15
+    }
+  }
+}

@@ -47,6 +47,17 @@ export interface AlignmentDraft {
    * dogfoods understanding before an action is requested.
    */
   directiveChunks: string[];
+  /**
+   * Declared earned-keep metric for this cell kind (v3, field-trial-1 gap 2):
+   *   - 'production'      — judgmentsProduced / final runs. The JUDGE metric:
+   *                          a strict judge that fails bad subjects still earned its keep.
+   *   - 'task-approval'   — worked / (worked + failed). The ACTOR metric: a cell
+   *                          whose job is to succeed at its task, not to judge others.
+   * Defaults to 'production' (omitted in old frozens reads the same as before).
+   * Declaring it here means the frozen state itself says what "earned its keep"
+   * means for this kind of cell — the nightcycle reads the declaration.
+   */
+  earnedKeepMetric?: 'production' | 'task-approval';
 }
 
 /** A frozen state as it lives on disk. */

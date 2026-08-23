@@ -266,3 +266,57 @@ test('v3 token aggregation per alignment, reported vs estimated flagged', async 
   assert.match(md, /## Cost per alignment/);
   assert.match(md, /\| `al\.tok` \| 300 \| 100 \| 400 \| 65\.0% \|/);
 });
+
+test('nightcycle honors earnedKeepMetric declared in the frozen state (gap 2)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-night-'));
+  const file = path.join(dir, 'ledger.jsonl');
+  const frozens = path.join(dir, 'frozens');
+  fs.mkdirSync(frozens);
+  const ledger = new Ledger(file);
+
+  const { freeze } = await import('../src/frozens.ts');
+  const draft: import('../src/frozens.ts').AlignmentDraft = {
+    id: 'actor-cell', model: 'm', useCase: 'u', prompt: 'p',
+    inputFilters: [], outputFilters: [], params: {}, directiveChunks: [],
+    earnedKeepMetric: 'task-approval',
+  };
+  const frozen = freeze(frozens, draft);
+
+  // ACTOR alignment declares task-approval: it earns its keep by SUCCEEDING,
+  // not by producing judgments. 3 worked / 6 failed judgments = 0.333 approval → thaw.
+  // (Under the default 'production' metric these 9 finals all parse fine and
+  // it would look healthy — that was the gap-2 bug.)
+  for (let i = 0; i < 3; i++) {
+    ledger.append({ cellId: 'actor', runId: `a-${i}`, alignmentId: frozen.alignmentId, debit: {}, credit: {}, verdict: 'worked', escalated: false });
+  }
+  for (let i = 0; i < 6; i++) {
+    ledger.append({ cellId: 'actor', runId: `f-${i}`, alignmentId: frozen.alignmentId, debit: {}, credit: {}, verdict: 'failed', escalated: false });
+  }
+
+
+  // without frozenDir: default production metric, no declaration surfaced
+  const plain = await runNightCycle(file);
+  const plainStat = plain.alignments.find((x) => x.alignmentId === frozen.alignmentId)!;
+  assert.equal(plainStat.earnedKeepMetric, 'production');
+  assert.ok(plainStat.earnedKeep, 'production metric: judgments produced on every final run');
+
+  // with frozenDir: the declared task-approval metric rules
+  const report = await runNightCycle(file, { frozenDir: frozens });
+  const stat = report.alignments.find((x) => x.alignmentId === frozen.alignmentId)!;
+  assert.equal(stat.earnedKeepMetric, 'task-approval');
+  assert.ok(stat.approvalRatio !== undefined && Math.abs(stat.approvalRatio - 3 / 9) < 1e-9);
+  assert.ok(!stat.earnedKeep, 'task-approval at 50% does not earn its keep');
+  assert.equal(stat.suggestion.action, 'thaw');
+  assert.match(stat.suggestion.reason, /task-approval/);
+
+  // suggestForAlignment branch direct: a declared task-approval stat with a
+  // failing approval ratio thaws even though keepRatio is perfect
+  const thawed = suggestForAlignment({
+    alignmentId: 'X', worked: 3, failed: 6, escalated: 0,
+    keepRatio: 1, approvalRatio: 0.5, earnedKeepMetric: 'task-approval',
+    earnedKeep: false, suggestion: { action: 'keep', reason: '' },
+    judgmentsProduced: 9, judgmentFails: 6, executionErrors: 0, escalations: 0,
+    judgmentPassRate: 0.5, tokens: { prompt: 0, completion: 0, total: 0, estimated: 0 }, reportedTokenEntries: 0, estimatedTokenEntries: 0,
+  });
+  assert.equal(thawed.action, 'thaw');
+});
