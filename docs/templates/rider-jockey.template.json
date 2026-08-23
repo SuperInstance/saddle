@@ -1,0 +1,18 @@
+{
+  "$comment": "RIDER: jockey — the race lane. HORSE: GLM-5-turbo (the fleet's designated runner) or no animal at all (pincher's reflex table). TACK: minimal bit (extra tokens are extra weight), no decorative filters, no stall on a miss — unmatched reflex escalates instantly. FLEET: quilt-pincher (<50ms, no LLM), voice-reflex-gate (hash-key routing), Scrapcraft's floodlit oval. PATTERN: small-model-first routing / reflex cascade. See docs/RIDER-TAXONOMY.md §1.",
+  "id": "rider.jockey.v0-template",
+  "model": "glm-5-turbo",
+  "useCase": "latency-critical race lane: match-and-answer in one pass, escalate on miss, never stall",
+  "prompt": "You are a race-lane responder. Answer in one tight pass. If the input does not clearly match your lane, say ESCALATE immediately — hesitation loses the race.",
+  "inputFilters": [
+    { "id": "in.lane-guard", "kind": "deny", "description": "reject inputs outside the lane's match set (route them to escalation, don't reason about them)" }
+  ],
+  "outputFilters": [
+    { "id": "out.brevity", "kind": "deny", "description": "reject verbose credit — a race answer is short or it lost" }
+  ],
+  "params": { "temperature": 0.2, "maxTokens": 256 },
+  "directiveChunks": [
+    "Chunk 1: recognize the stimulus class. Acknowledge in one word.",
+    "Chunk 2: answer it. Nothing more."
+  ]
+}

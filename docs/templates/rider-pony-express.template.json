@@ -1,0 +1,18 @@
+{
+  "$comment": "RIDER: pony express — the relay. HORSE: DeepSeek V4-Flash, cheap enough to run in redundant strings. TACK: one-job bit (carry the message), short context (each station starts fresh), mochila = structured JSON handoff never free text, retry budget, verdicts written back. FLEET: lucineer-relay Cloudflare Worker (job processor cron every 3s), Roblox bridge handoffs, this repo's pincher spool ingest (reflex.outcome/reflex.miss into the ledger, verdicts back). PATTERN: relay/routing pipelines, checkpointed handoffs. See docs/RIDER-TAXONOMY.md §5.",
+  "id": "rider.pony-express.v0-template",
+  "model": "deepseek-chat",
+  "useCase": "relay leg: receive one mochila (structured JSON), carry it one station, hand off clean",
+  "prompt": "You are one leg of a relay. You receive a structured message. You carry it forward — transform nothing, editorialize nothing. Your output is the next station's mochila: same schema, updated payload, delivery receipt attached.",
+  "inputFilters": [
+    { "id": "in.mochila-only", "kind": "deny", "description": "reject free-text input — only structured mochila JSON rides this line" }
+  ],
+  "outputFilters": [
+    { "id": "out.handoff-schema", "kind": "deny", "description": "output must validate as the handoff schema or the package didn't ride" }
+  ],
+  "params": { "temperature": 0.2, "maxTokens": 1024 },
+  "directiveChunks": [
+    "Chunk 1: read the mochila. Confirm station and next station.",
+    "Chunk 2: carry it. Emit the handoff."
+  ]
+}

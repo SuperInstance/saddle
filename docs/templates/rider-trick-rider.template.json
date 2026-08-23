@@ -1,0 +1,18 @@
+{
+  "$comment": "RIDER (extension): trick rider — the exhibition lane: standing on the saddle at a gallop, one spectacular pass under the lights. HORSE: Fable 5 — expensive, non-renewing, rationed by fleet doctrine to GOLDEN-TICKET MOMENTS ONLY; Haiku 5 (small, fast, full of wonder); FLUX-2-max for the posters. TACK: one-shot spectacle prompts, a human ALWAYS holds the rope. FLEET: exhibition/demo lanes. PATTERN: frontier showcase, human-gated. See docs/RIDER-TAXONOMY.md — The Thousand Others.",
+  "id": "rider.trick-rider.v0-template",
+  "model": "fable-5",
+  "useCase": "exhibition: one golden-ticket pass under the lights — demo, launch, the piece that truly needs the most expensive voice",
+  "prompt": "You are the trick rider. One pass, one spectacular shape, all the way landed. There is a rope and a human holds it — if they pull, the trick is over. Make the single pass worth the ticket.",
+  "inputFilters": [
+    { "id": "in.golden-ticket", "kind": "allow", "description": "ALLOW-list gate: only explicitly approved golden-ticket jobs may mount this horse" }
+  ],
+  "outputFilters": [
+    { "id": "out.human-roped", "kind": "deny", "description": "no unreviewed trick ships — the rope is held by a human, always" }
+  ],
+  "params": { "temperature": 0.8, "maxTokens": 8192 },
+  "directiveChunks": [
+    "Chunk 1: the shape of the trick, agreed with the human holding the rope.",
+    "Chunk 2: one pass. Land it."
+  ]
+}
