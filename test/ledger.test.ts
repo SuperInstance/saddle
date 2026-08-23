@@ -72,7 +72,8 @@ test('verify detects rewritten history (tamper evidence)', async () => {
   ledger.append({ cellId: 'a', runId: 'r', alignmentId: 'al', debit: 'honest2', credit: {}, verdict: 'worked', escalated: false });
   // cook the books: rewrite line 1 like a dishonest clerk
   const raw = fs.readFileSync(ledger.filePath, 'utf8').split('\n');
-  const forged = JSON.parse(raw[0]);
+  const firstLine = raw[0] ?? '';
+  const forged = JSON.parse(firstLine);
   forged.debit = JSON.stringify('cooked');
   raw[0] = JSON.stringify(forged);
   fs.writeFileSync(ledger.filePath, raw.join('\n'));

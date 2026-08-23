@@ -250,7 +250,8 @@ Two new pieces of gear, both honest about what's real:
 
 ## ✦ Install / Run
 
-Zero npm dependencies — runs on stock Node ≥ 22.18 (native TypeScript).
+Zero runtime npm dependencies — runs on stock Node ≥ 22.18 (native TypeScript).
+Dev-only: `typescript` + `@types/node` (for `npm run typecheck`).
 
 ```bash
 git clone git@github.com:SuperInstance/saddle.git
