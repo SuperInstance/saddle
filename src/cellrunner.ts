@@ -4,6 +4,16 @@
  * Runs one inference (with retries) and logs to the ledger, without ever calling
  * a model directly — the adapter is injected. Double-entry bookkeeping on every
  * attempt: debit (full prompt + input + model), credit (output), verdict.
+ *
+ * Attempt outcomes come in exactly two classes:
+ *
+ *   judgment — parseCredit succeeded. The credit is a real judgment (scores,
+ *     reason, ...). Its verdict — 'worked' OR 'failed' — is FINAL: a QC-fail
+ *     is a completed judgment, not a give-up. Never retried, never escalated.
+ *
+ *   error — the adapter call threw (transport) or parseCredit threw
+ *     (unparseable output). The credit is `{ error }`. Retried until
+ *     maxAttempts; the last attempt is marked escalated (the cell gave up).
  */
 
 import { Ledger, type Verdict, type LedgerEntry } from './ledger.ts';
@@ -45,6 +55,15 @@ export interface RunCellResult {
   final: LedgerEntry;
 }
 
+/** True when a credit is a real judgment (parse succeeded) — not an attempt error. */
+export function isJudgmentCredit(credit: unknown): boolean {
+  return credit !== null && typeof credit === 'object' && !('error' in (credit as object));
+}
+
+function errorText(err: unknown): string {
+  return String(err instanceof Error ? err.message : err).slice(0, 200);
+}
+
 export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
   const maxAttempts = opts.maxAttempts ?? 2;
   const frozen = thaw(opts.frozenDir, opts.alignmentId);
@@ -59,6 +78,8 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
       params: frozen.params,
       adapter: opts.adapter.name,
     };
+    const retryOf = attempt > 1 ? entries[entries.length - 1]?.seq : undefined;
+    const gaveUp = attempt === maxAttempts;
 
     let entry: LedgerEntry;
 
@@ -71,55 +92,69 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
       });
       const latencyMs = Math.round(performance.now() - startMs);
 
-      let verdict: Verdict;
-      let credit: unknown;
-
       try {
         const parsed = opts.parseCredit(output.raw, frozen);
-        verdict = parsed.verdict;
-        credit = parsed.credit;
+
+        // Valid judgment — final regardless of pass/fail. Never escalated.
+        // Stamp the credit with cellrunner's own round-trip latency and the
+        // attempt count, so downstream stats never depend on the model
+        // self-reporting either.
+        const judgment: Record<string, unknown> =
+          parsed.credit !== null && typeof parsed.credit === 'object' ? (parsed.credit as Record<string, unknown>) : {};
+        entry = opts.ledger.append({
+          cellId: opts.cellId,
+          runId: opts.runId,
+          alignmentId: opts.alignmentId,
+          debit,
+          credit: { ...judgment, latencyMs, attempts: attempt },
+          verdict: parsed.verdict,
+          escalated: false,
+          retryOf,
+        });
+
+        entries.push(entry);
+        return { entries, final: entry };
       } catch (err) {
-        verdict = 'failed';
-        credit = { error: String(err instanceof Error ? err.message : err) };
+        // Unparseable output — retry, or give up on the last attempt.
+        const msg = errorText(err);
+        entry = opts.ledger.append({
+          cellId: opts.cellId,
+          runId: opts.runId,
+          alignmentId: opts.alignmentId,
+          debit,
+          credit: { error: msg },
+          verdict: 'failed',
+          escalated: gaveUp,
+          note: gaveUp
+            ? `gave up: unparseable output after ${attempt} attempts: ${msg}`
+            : `attempt ${attempt}: unparseable output: ${msg}`,
+          retryOf,
+        });
       }
-
-      const note = verdict === 'failed' && credit && typeof credit === 'object' && 'error' in credit ? `attempt ${attempt}: ${String((credit as any).error).slice(0, 200)}` : undefined;
-      const escalated = verdict === 'failed' && attempt === maxAttempts;
-
-      entry = opts.ledger.append({
-        cellId: opts.cellId,
-        runId: opts.runId,
-        alignmentId: opts.alignmentId,
-        debit,
-        credit,
-        verdict,
-        escalated,
-        note: escalated && verdict === 'failed' ? `gave up: ${note ?? 'max attempts exceeded'}` : note,
-        retryOf: attempt > 1 ? entries[entries.length - 1].seq : undefined,
-      });
     } catch (err) {
-      const errorMsg = String(err instanceof Error ? err.message : err).slice(0, 200);
-      const escalated = attempt === maxAttempts;
-
+      // Transport/adapter error — retry, or give up on the last attempt.
+      const msg = errorText(err);
       entry = opts.ledger.append({
         cellId: opts.cellId,
         runId: opts.runId,
         alignmentId: opts.alignmentId,
         debit,
-        credit: { error: errorMsg },
+        credit: { error: msg },
         verdict: 'failed',
-        escalated,
-        note: escalated ? `gave up: attempt ${attempt}: ${errorMsg}` : `attempt ${attempt}: ${errorMsg}`,
-        retryOf: attempt > 1 ? entries[entries.length - 1].seq : undefined,
+        escalated: gaveUp,
+        note: gaveUp
+          ? `gave up: adapter error after ${attempt} attempts: ${msg}`
+          : `attempt ${attempt}: adapter error: ${msg}`,
+        retryOf,
       });
     }
 
     entries.push(entry);
-
-    if (entry.verdict === 'worked' || entry.escalated) {
+    if (entry.escalated) {
       return { entries, final: entry };
     }
   }
 
-  return { entries, final: entries[entries.length - 1] };
+  // Unreachable: the final attempt always returns (judgment or give-up).
+  return { entries, final: entries[entries.length - 1]! };
 }

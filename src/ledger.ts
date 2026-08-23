@@ -123,8 +123,9 @@ export class Ledger {
       const buf = Buffer.alloc(window);
       fs.readSync(fd, buf, 0, window, size - window);
       const lines = buf.toString('utf8').split('\n').filter((l) => l.trim());
-      if (lines.length === 0) return null;
-      return JSON.parse(lines[lines.length - 1]) as LedgerEntry;
+      const lastLine = lines[lines.length - 1];
+      if (!lastLine) return null;
+      return JSON.parse(lastLine) as LedgerEntry;
     } finally {
       fs.closeSync(fd);
     }

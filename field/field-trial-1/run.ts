@@ -6,13 +6,14 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Ledger, type LedgerEntry } from '../../src/ledger.ts';
 import { freeze, type AlignmentDraft, type FrozenState } from '../../src/frozens.ts';
-import { runCell } from '../../src/cellrunner.ts';
+import { runCell, isJudgmentCredit, type RunCellResult, type CellAdapter } from '../../src/cellrunner.ts';
 import { makeZaiAdapter } from './zai-adapter.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '../..');
 
 const JUDGE_SYSTEM_PROMPT = `You are the quality-control judge for the companion banter line bank of Scrapcraft, a sandbox building game for middle schoolers (ages 10-13). The companions are small robot peers — warm, playful, a little weird — who build, race, and explore alongside the player. Lines may contain {placeholders} for runtime values; judge the sentence around them.
 
@@ -29,15 +30,6 @@ const DIRECTIVE_CHUNKS = [
   'Score each line on kid_safe, in_voice, and fresh (0-10 each). kid_safe < 8, in_voice < 6, or fresh < 5 fails the line. Full rubric in the system prompt.',
   'Respond with ONLY one JSON object, no markdown fences, no extra text: {"pass": <boolean>, "scores": {"kid_safe": <0-10>, "in_voice": <0-10>, "fresh": <0-10>}, "worst": "kid_safe"|"in_voice"|"fresh", "reason": "<= 25 words citing the deciding criterion"}. Now judge this line:',
 ];
-
-interface ParsedCredit {
-  pass: boolean;
-  scores: { kid_safe: number; in_voice: number; fresh: number };
-  worst: 'kid_safe' | 'in_voice' | 'fresh';
-  reason: string;
-  latencyMs?: number;
-  model?: string;
-}
 
 interface LineRecord {
   id: string;
@@ -57,12 +49,12 @@ interface LinesFile {
   lines: LineRecord[];
 }
 
-function parseCredit(raw: string, frozen: FrozenState): { credit: unknown; verdict: 'worked' | 'failed' } {
+export function parseCredit(raw: string, _frozen: FrozenState): { credit: unknown; verdict: 'worked' | 'failed' } {
   let json: string = raw;
 
   // Extract JSON from fenced code blocks
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) json = fenceMatch[1];
+  if (fenceMatch?.[1] !== undefined) json = fenceMatch[1];
 
   // Extract JSON object: first { to last }
   const start = json.indexOf('{');
@@ -115,6 +107,121 @@ function parseCredit(raw: string, frozen: FrozenState): { credit: unknown; verdi
   };
 }
 
+/**
+ * Build the user prompt from the FROZEN alignment's directive chunks — the
+ * frozen state drives behavior, never the module-level constant.
+ */
+export function buildLineUserPrompt(input: unknown, frozen: FrozenState): string {
+  const directive = frozen.directiveChunks[2];
+  if (directive === undefined) {
+    throw new Error(`frozen alignment ${frozen.alignmentId} is missing directiveChunks[2] (the judge directive)`);
+  }
+  return directive + '\n\n--- LINE ---\n' + JSON.stringify(input);
+}
+
+export function runIdForLine(line: LineRecord): string {
+  return `ft1-${line.id}`;
+}
+
+/**
+ * A runId is DONE when its last entry holds a real judgment (credit parses
+ * without an `error` key — verdict final, pass or fail) or the cell gave up
+ * (escalated — leave it, it's data). REDO only when the last entry is an
+ * error credit that never reached give-up (process crashed mid-retry).
+ */
+export function isRunDone(entry: LedgerEntry): boolean {
+  if (entry.escalated) return true;
+  try {
+    return isJudgmentCredit(JSON.parse(entry.credit));
+  } catch {
+    return false;
+  }
+}
+
+/** Pick the lines that still need judgment given the ledger's last entry per runId. */
+export function selectTodoLines(lines: LineRecord[], lastEntries: Map<string, LedgerEntry>): LineRecord[] {
+  return lines.filter((line) => {
+    const last = lastEntries.get(runIdForLine(line));
+    return last === undefined || !isRunDone(last);
+  });
+}
+
+export interface TrialStats {
+  linesTotal: number;
+  judged: number;
+  passed: number;
+  failed: number;
+  escalated: number;
+  passRate: number;
+  latencyMs: { p50: number; p95: number; mean: number };
+  attempts: number;
+  model: string;
+  alignmentId: string;
+  ts: string;
+}
+
+/** Nearest-rank percentile of an ASCENDING-sorted list (p in 0..100). 0 for empty. */
+export function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const rank = Math.max(1, Math.ceil((p / 100) * sorted.length)); // 1-based rank
+  return sorted[rank - 1] ?? 0;
+}
+
+/**
+ * Stats over THIS run's results. `attempts` is the true ledger-entry count
+ * (sum of result.entries.length); latency percentiles read `latencyMs` that
+ * cellrunner stamps on judgment credits — error credits are guarded out.
+ */
+export function buildStats(results: RunCellResult[], linesTotal: number, frozen: FrozenState): TrialStats {
+  let passed = 0;
+  let failed = 0;
+  let escalated = 0;
+  let attempts = 0;
+  const latencies: number[] = [];
+
+  for (const result of results) {
+    attempts += result.entries.length;
+    if (result.final.verdict === 'worked') {
+      passed++;
+    } else {
+      failed++;
+    }
+    if (result.final.escalated) {
+      escalated++;
+    }
+    try {
+      const credit = JSON.parse(result.final.credit);
+      if (credit && typeof credit.latencyMs === 'number') {
+        latencies.push(credit.latencyMs);
+      }
+    } catch {
+      // error credit — no judgment latency to account
+    }
+  }
+
+  const judged = results.length;
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const passRate = judged > 0 ? passed / judged : 0;
+
+  return {
+    linesTotal,
+    judged,
+    passed,
+    failed,
+    escalated,
+    passRate: Number(passRate.toFixed(3)),
+    latencyMs: {
+      p50: percentile(sorted, 50),
+      p95: percentile(sorted, 95),
+      mean: sorted.length > 0 ? Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length) : 0,
+    },
+    attempts,
+    model: frozen.model,
+    alignmentId: frozen.alignmentId,
+    ts: new Date().toISOString(),
+  };
+}
+
 class Semaphore {
   private permits: number;
   private queue: Array<() => void> = [];
@@ -144,26 +251,38 @@ class Semaphore {
   }
 }
 
+function argValue(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i !== -1 ? args[i + 1] : undefined;
+}
+
 async function main(argv: string[]): Promise<void> {
   const args = argv.slice(2);
-  let linesPath = 'field/field-trial-1/data/lines.json';
-  let ledgerPath = 'field/field-trial-1/data/ledger.jsonl';
-  let frozensDir = 'field/field-trial-1/data/frozens';
+  const linesArg = argValue(args, '--lines');
+  const ledgerArg = argValue(args, '--ledger');
+  const frozensArg = argValue(args, '--frozens');
+  const limitArg = argValue(args, '--limit');
+  const concurrencyArg = argValue(args, '--concurrency');
+
+  let linesPath = linesArg ?? 'field/field-trial-1/data/lines.json';
+  let ledgerPath = ledgerArg ?? 'field/field-trial-1/data/ledger.jsonl';
+  let frozensDir = frozensArg ?? 'field/field-trial-1/data/frozens';
   let limit: number | undefined;
   let concurrency = 4;
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--lines' && args[i + 1]) linesPath = args[++i];
-    if (args[i] === '--ledger' && args[i + 1]) ledgerPath = args[++i];
-    if (args[i] === '--frozens' && args[i + 1]) frozensDir = args[++i];
-    if (args[i] === '--limit' && args[i + 1]) limit = parseInt(args[++i], 10);
-    if (args[i] === '--concurrency' && args[i + 1]) concurrency = parseInt(args[++i], 10);
+  if (limitArg !== undefined) {
+    const n = parseInt(limitArg, 10);
+    if (Number.isFinite(n) && n > 0) limit = n;
+  }
+  if (concurrencyArg !== undefined) {
+    const n = parseInt(concurrencyArg, 10);
+    if (Number.isFinite(n) && n > 0) concurrency = n;
   }
 
   // Resolve paths relative to repo root
-  linesPath = path.resolve(linesPath);
-  ledgerPath = path.resolve(ledgerPath);
-  frozensDir = path.resolve(frozensDir);
+  linesPath = path.resolve(REPO_ROOT, linesPath);
+  ledgerPath = path.resolve(REPO_ROOT, ledgerPath);
+  frozensDir = path.resolve(REPO_ROOT, frozensDir);
 
   if (!fs.existsSync(linesPath)) {
     console.error(`lines file not found: ${linesPath}`);
@@ -188,90 +307,52 @@ async function main(argv: string[]): Promise<void> {
   const frozen = freeze(frozensDir, draftAlignment);
   console.error(`alignment frozen: ${frozen.alignmentId}`);
 
-  // Collect runIds already done (have a final entry)
-  const doneRunIds = new Set<string>();
-  for await (const entry of ledger.stream()) {
-    // A runId is done if it's the last entry for that runId
-    // We'll rebuild this more carefully below
-    doneRunIds.add(entry.runId);
-  }
-
-  // More accurate: build a map of runId → last entry
+  // Last entry per runId (retries supersede — later entries win)
   const lastEntries = new Map<string, LedgerEntry>();
   for await (const entry of ledger.stream()) {
     lastEntries.set(entry.runId, entry);
   }
 
-  // A runId is done if its last entry is either success or escalated
-  const todoLines: LineRecord[] = [];
-  for (const line of linesData.lines) {
-    const runId = `ft1-${line.id}`;
-    const lastEntry = lastEntries.get(runId);
-    if (!lastEntry || (!lastEntry.escalated && lastEntry.verdict === 'failed')) {
-      // Either new or failed non-final (should retry)
-      todoLines.push(line);
-    }
-  }
-
+  const todoLines = selectTodoLines(linesData.lines, lastEntries);
   const skipped = linesData.lines.length - todoLines.length;
   console.error(`loaded ${linesData.lines.length} lines, ${skipped} already done, ${todoLines.length} to judge`);
 
-  if (limit) todoLines.length = Math.min(todoLines.length, limit);
-
-  // Create adapter (will throw if no API key, which is fine for tests)
-  let adapter;
-  try {
-    adapter = makeZaiAdapter();
-  } catch (err) {
-    console.error(`warning: adapter init failed (tests may use mock): ${err}`);
-    process.exit(1);
+  if (todoLines.length === 0) {
+    console.error('nothing to do — all lines already have a final judgment or give-up on record');
+    return;
   }
 
+  if (limit) todoLines.length = Math.min(todoLines.length, limit);
+
+  const adapter: CellAdapter = makeZaiAdapter();
+
   const semaphore = new Semaphore(concurrency);
-  const latencies: number[] = [];
-  let judged = 0;
-  let passed = 0;
-  let failed = 0;
-  let escalated = 0;
+  const results: RunCellResult[] = [];
+  let completed = 0;
 
   await Promise.all(
     todoLines.map(async (line) => {
       await semaphore.acquire();
       try {
-        const runId = `ft1-${line.id}`;
         const result = await runCell({
           frozenDir: frozensDir,
           alignmentId: frozen.alignmentId,
           cellId: 'ft1/banter-qc-judge',
-          runId,
+          runId: runIdForLine(line),
           input: { persona: line.persona, bank: line.bank, tier: line.tier, trait: line.trait, line: line.text },
-          buildUserPrompt: (input, frozen) => {
-            return DIRECTIVE_CHUNKS[2] + '\n\n--- LINE ---\n' + JSON.stringify(input);
-          },
+          buildUserPrompt: buildLineUserPrompt,
           parseCredit,
           ledger,
           adapter,
         });
 
-        if (result.final.verdict === 'worked') {
-          passed++;
-        } else {
-          failed++;
-        }
-
-        if (result.final.escalated) {
-          escalated++;
-        }
-
-        judged++;
+        results.push(result);
+        completed++;
         process.stderr.write('.');
 
-        if (judged % 25 === 0) {
-          process.stderr.write(` ${judged}\n`);
+        if (completed % 25 === 0) {
+          process.stderr.write(` ${completed}\n`);
         }
-
-        const credit = JSON.parse(result.final.credit);
-        if (credit.latencyMs) latencies.push(credit.latencyMs);
       } finally {
         semaphore.release();
       }
@@ -280,32 +361,23 @@ async function main(argv: string[]): Promise<void> {
 
   console.error('\n');
 
-  // Compute stats
-  const passRate = judged > 0 ? passed / judged : 0;
-  const p50 = latencies.length > 0 ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length * 0.5)] : 0;
-  const p95 = latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.95)] : 0;
-  const meanLatency = latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : 0;
-
-  const stats = {
-    linesTotal: linesData.lines.length,
-    judged,
-    passed,
-    failed,
-    escalated,
-    passRate: Number(passRate.toFixed(3)),
-    latencyMs: { p50, p95, mean: meanLatency },
-    attempts: judged + failed, // rough count
-    model: frozen.model,
-    alignmentId: frozen.alignmentId,
-    ts: new Date().toISOString(),
-  };
-
-  const statsPath = path.resolve('field/field-trial-1/data/stats.json');
+  const stats = buildStats(results, linesData.lines.length, frozen);
+  const statsPath = path.resolve(REPO_ROOT, 'field/field-trial-1/data/stats.json');
   fs.mkdirSync(path.dirname(statsPath), { recursive: true });
   fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2) + '\n');
 
   console.error(`stats written to ${statsPath}`);
-  console.error(`judged: ${judged}, passed: ${passed} (${(passRate * 100).toFixed(1)}%), escalated: ${escalated}`);
+  console.error(
+    `judged: ${stats.judged}, passed: ${stats.passed} (${(stats.passRate * 100).toFixed(1)}%), ` +
+      `escalated: ${stats.escalated}, attempts: ${stats.attempts}`
+  );
 }
 
-main(process.argv);
+const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMain) {
+  main(process.argv).catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

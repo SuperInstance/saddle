@@ -14,11 +14,12 @@
   },
   "main": "./src/index.ts",
   "scripts": {
-    "test": "node --test test/*.test.ts",
+    "test": "node --test test/*.test.ts field/field-trial-1/*.test.ts",
     "nightcycle": "node src/nightcycle.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "typescript": "^5.8.0"
   },
   "keywords": [

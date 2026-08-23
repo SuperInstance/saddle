@@ -18,23 +18,23 @@ Generic cell runner: orchestrates inference (with retries) and ledger management
   - Thaw frozen alignment (throws on hash mismatch)
   - Build user prompt from input + frozen state
   - Time the adapter call
-  - Parse output (throw to retry or reject)
-  - Log to ledger (every attempt, chain verified)
-  - Resume on non-escalated failures; give up after maxAttempts
+  - Parse output: a successful parse is a JUDGMENT — its verdict (pass or fail) is final, never retried, never escalated
+  - An unparseable output or transport error is an ERROR attempt — retried until maxAttempts, the last marked `escalated` (the cell gave up)
+  - Log every attempt to the ledger (chain verified); judgment credits are stamped with `latencyMs` + `attempts`
 
 ### Field Harness: `field/field-trial-1/`
 
-#### `walk.mjs` — pure line extraction functions
+#### `walk.ts` — pure line extraction functions
 
 Exported: `extractLines(banterMod, tierUpMod, observationsMod, rivetAmbientMod, personasMod, partMod) → lines[]`
 
 Testable in isolation (takes module objects, not live imports). Dedupes lines by exact text; first-seen wins.
 
-#### `extract-lines.mjs` — production line extractor
+#### `extract-lines.ts` — production line extractor
 
-CLI: `node extract-lines.mjs [--src ../Scrapcraft/src/companion] [--out field/field-trial-1/data/lines.json]`
+CLI: `node extract-lines.ts [--src ../Scrapcraft/src/companion] [--out field/field-trial-1/data/lines.json]`
 
-Imports real Scrapcraft companion modules and walks them via `walk.mjs`. Outputs `lines.json` with deduped line records (id, persona, bank, tier?, trait?, gate?, evaluatedWith?, text) + stats.
+Imports real Scrapcraft companion modules and walks them via `walk.ts`. Relative `--src`/`--out` paths resolve against the REPO ROOT (the script lives at `<repo>/field/field-trial-1/`), so outputs always land inside the repo. Outputs `lines.json` with deduped line records (id, persona, bank, tier?, trait?, gate?, evaluatedWith?, text) + stats.
 
 #### `zai-adapter.ts` — network-facing Z.ai client
 
@@ -53,10 +53,10 @@ CLI: `node run.ts [--lines data/lines.json] [--ledger data/ledger.jsonl] [--froz
 Orchestration:
 1. Freeze the judge alignment (system prompt + filtering rules + params + directive chunks)
 2. Load lines.json
-3. Resume-safe: stream existing ledger, skip runIds that already have a final (non-retry-pending) entry
-4. Concurrently judge each line via `cellrunner.runCell()`
+3. Resume-safe: stream existing ledger, keep the LAST entry per runId (retries supersede). A runId is DONE when that entry holds a judgment credit (parses without an `error` key — pass or fail, both final) or is escalated (gave up — left as data). Only an error credit that never reached give-up (crashed mid-retry) is redone.
+4. Concurrently judge each line via `cellrunner.runCell()`; user prompts are built from the FROZEN directive chunks, never module constants
 5. Log progress and stats to stderr
-6. Write stats.json (judged count, pass rate, latency percentiles, model, alignmentId)
+6. Write stats.json (judged count, pass rate, latency percentiles from judgment credits, TRUE attempt count = ledger entries written, model, alignmentId)
 
 **Judge system prompt:** evaluates lines on three criteria (0-10 each):
 - **kid_safe:** age-appropriate, no profanity/harm/innuendo (pass iff ≥ 8)
@@ -69,10 +69,10 @@ Orchestration:
 
 CLI: `node findings.ts data/ledger.jsonl --out data/reports/findings.md [--worst 15]`
 
-Streams ledger, keeping only the last entry per runId (supersedes retries). Skips judge-failure entries (credit.error).
+Streams ledger, keeping only the last entry per runId (supersedes retries). Skips judge-failure entries (credit.error) and counts give-ups (escalated) separately from QC-failed judgments.
 
 Output: markdown report with:
-- Summary (judged / passed / failed / pass rate / judge failures)
+- Summary (judged / passed / failed / pass rate / judge failures / escalations)
 - Per-criterion mean / min scores
 - Worst N lines by (total score, tiebreak by min criterion)
   - Scores and judge reason for each
@@ -84,18 +84,18 @@ Output: markdown report with:
 
 Each judgment attempt → one ledger entry. Entries have:
 - **debit:** full cost (prompt system + user, input, model, params, adapter name)
-- **credit:** output (pass/scores/reason or error)
+- **credit:** output — a judgment (pass/scores/reason, stamped with `latencyMs` + `attempts`) or `{ error }` for a failed attempt
 - **verdict:** 'worked' or 'failed'
-- **escalated:** true only on final give-up (all retries exhausted)
+- **escalated:** true ONLY when the cell gave up (unparseable/transport error after all attempts) — a QC-failed judgment is a valid, final verdict and is never escalated
 - **retryOf:** seq of previous attempt (if a retry)
 
-A runId is **done** if its last ledger entry is either success or escalated. Resume checks this before re-running.
+A runId is **done** if its last ledger entry holds a judgment credit or is escalated. Resume redoes only crashed retries (error credit, not escalated).
 
 ## Testing (no network)
 
 `npm test` — runs all tests including:
-- `test/cellrunner.test.ts` — core retry logic, ledger chain verification, tamper detection
-- `field/field-trial-1/run.test.ts` — parseCredit JSON parsing, alignment freeze/thaw, line extraction, findings generation
+- `test/cellrunner.test.ts` — core retry/give-up semantics, judgment-finality, latency accounting, ledger chain verification, tamper detection
+- `field/field-trial-1/run.test.ts` — parseCredit, resume/done logic, frozen-driven prompts, stats accounting, path resolution, line extraction, findings report
 
 Tests use temporary directories and fake module objects; no external API calls.
 
@@ -103,7 +103,7 @@ Tests use temporary directories and fake module objects; no external API calls.
 
 ```bash
 # 1. Extract lines from Scrapcraft
-node field/field-trial-1/extract-lines.mjs --src ../Scrapcraft/src/companion
+node field/field-trial-1/extract-lines.ts --src ../Scrapcraft/src/companion
 
 # 2. Run judgments (requires Z.ai API key)
 export ZAI_API_KEY="your-key"

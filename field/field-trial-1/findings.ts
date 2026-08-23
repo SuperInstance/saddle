@@ -6,16 +6,13 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Ledger, type LedgerEntry } from '../../src/ledger.ts';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Ledger, type LedgerEntry, type VerifyResult } from '../../src/ledger.ts';
 
-interface ParsedCredit {
-  pass: boolean;
-  scores: { kid_safe: number; in_voice: number; fresh: number };
-  worst: 'kid_safe' | 'in_voice' | 'fresh';
-  reason: string;
-}
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '../..');
 
-interface LineJudgment {
+export interface LineJudgment {
   runId: string;
   persona: string;
   bank: string;
@@ -29,70 +26,84 @@ interface LineJudgment {
   reason: string;
 }
 
-async function main(argv: string[]): Promise<void> {
-  const args = argv.slice(2);
-  const ledgerPath = args.find((a) => !a.startsWith('--'));
-  let outPath: string | undefined;
-  let worstCount = 15;
+/** Extract the line record JSON that run.ts embeds after the `--- LINE ---` marker. */
+function extractLineData(userPrompt: string): Record<string, unknown> {
+  const lineMatch = userPrompt.match(/--- LINE ---\n(.*)/s);
+  if (!lineMatch?.[1]) return {};
+  try {
+    return JSON.parse(lineMatch[1]) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--out' && args[i + 1]) outPath = args[++i];
-    if (args[i] === '--worst' && args[i + 1]) worstCount = parseInt(args[++i], 10);
+/** Turn a last-entry into a judgment, or null for judge failures (error credits). */
+export function toJudgment(entry: LedgerEntry): LineJudgment | null {
+  let credit: any;
+  try {
+    credit = JSON.parse(entry.credit);
+  } catch {
+    return null; // malformed credit — treat as a judge failure
+  }
+  if (credit === null || typeof credit !== 'object' || 'error' in credit) {
+    return null; // error credit — the judge gave no verdict for this attempt
   }
 
-  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
-    console.error('usage: node findings.ts <ledger.jsonl> --out <report.md> [--worst N]');
-    process.exit(1);
+  let debit: any = {};
+  try {
+    debit = JSON.parse(entry.debit);
+  } catch {
+    // keep going — line metadata is best-effort
   }
+  const userPrompt: string = debit?.prompt?.user ?? '';
+  const lineData = extractLineData(userPrompt);
 
-  const ledger = new Ledger(ledgerPath);
+  return {
+    runId: entry.runId,
+    persona: typeof lineData.persona === 'string' ? lineData.persona : 'unknown',
+    bank: typeof lineData.bank === 'string' ? lineData.bank : 'unknown',
+    ...(lineData.tier !== undefined ? { tier: lineData.tier as number } : {}),
+    ...(lineData.trait !== undefined ? { trait: lineData.trait as string } : {}),
+    text: typeof lineData.line === 'string' ? lineData.line : '(unparseable)',
+    verdict: entry.verdict,
+    pass: credit.pass === true,
+    scores: credit.scores ?? { kid_safe: 0, in_voice: 0, fresh: 0 },
+    worst: credit.worst ?? 'kid_safe',
+    reason: typeof credit.reason === 'string' ? credit.reason : '(no reason)',
+  };
+}
 
-  // Verify hash chain first
-  const verify = await ledger.verify();
-  const verifyOk = verify.ok ? '✅ hash chain verified' : `❌ hash chain broken at seq ${verify.badSeq}: ${verify.reason}`;
+export function getRecommendation(j: LineJudgment): string {
+  const { kid_safe, in_voice, fresh } = j.scores;
+  if (kid_safe <= 4 || in_voice <= 4 || fresh <= 4) return 'REWRITE';
+  if (kid_safe <= 6) return 'RETIRE';
+  if (fresh <= 5) return 'PUNCH UP';
+  return 'REVIEW';
+}
 
-  // Collect final entries per runId and parse credits
-  const lastEntries = new Map<string, LedgerEntry>();
-  for await (const entry of ledger.stream()) {
-    lastEntries.set(entry.runId, entry);
-  }
+/**
+ * Build the markdown findings report from the LAST entry per runId (retries
+ * supersede — later entries win). Pure: no filesystem, no ledger.
+ */
+export function buildFindingsReport(lastEntries: Map<string, LedgerEntry>, verify: VerifyResult, worstCount: number): string {
+  const verifyOk = verify.ok
+    ? '✅ hash chain verified'
+    : `❌ hash chain broken at seq ${verify.badSeq ?? '?'}: ${verify.reason ?? 'unknown reason'}`;
 
   const judgments: LineJudgment[] = [];
   let judgeFailures = 0;
+  let escalated = 0;
 
   for (const entry of lastEntries.values()) {
-    const credit = JSON.parse(entry.credit);
-    if (credit.error) {
+    if (entry.escalated) {
+      escalated++;
+    }
+    const judgment = toJudgment(entry);
+    if (judgment === null) {
       judgeFailures++;
       continue;
     }
-
-    // Extract line info from debit
-    const debit = JSON.parse(entry.debit);
-    const userPrompt = debit.prompt.user || '';
-    let lineData: any = {};
-    try {
-      const lineMatch = userPrompt.match(/--- LINE ---\n(.*)/s);
-      if (lineMatch) {
-        lineData = JSON.parse(lineMatch[1]);
-      }
-    } catch {
-      // Couldn't extract
-    }
-
-    judgments.push({
-      runId: entry.runId,
-      persona: lineData.persona || 'unknown',
-      bank: lineData.bank || 'unknown',
-      tier: lineData.tier,
-      trait: lineData.trait,
-      text: lineData.line || '(unparseable)',
-      verdict: entry.verdict,
-      pass: credit.pass ?? false,
-      scores: credit.scores || { kid_safe: 0, in_voice: 0, fresh: 0 },
-      worst: credit.worst || 'kid_safe',
-      reason: credit.reason || '(no reason)',
-    });
+    judgments.push(judgment);
   }
 
   // Compute stats
@@ -103,15 +114,14 @@ async function main(argv: string[]): Promise<void> {
 
   // Per-criterion stats
   const criteria = ['kid_safe', 'in_voice', 'fresh'] as const;
-  const criteriaStats = {} as Record<string, { mean: number; min: number }>;
-
-  for (const crit of criteria) {
+  const criteriaStats = criteria.map((crit) => {
     const scores = judgments.map((j) => j.scores[crit]);
-    criteriaStats[crit] = {
+    return {
+      crit,
       mean: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0,
       min: scores.length > 0 ? Math.min(...scores) : 0,
     };
-  }
+  });
 
   // Worst lines: lowest total score, tiebreak by min criterion
   const worst = judgments.slice().sort((a, b) => {
@@ -130,15 +140,6 @@ async function main(argv: string[]): Promise<void> {
     personaStats.set(j.persona, stat);
   }
 
-  // Recommendation logic
-  const getRecommendation = (j: LineJudgment): string => {
-    const { kid_safe, in_voice, fresh } = j.scores;
-    if (kid_safe <= 4 || in_voice <= 4 || fresh <= 4) return 'REWRITE';
-    if (kid_safe <= 6) return 'RETIRE';
-    if (fresh <= 5) return 'PUNCH UP';
-    return 'REVIEW';
-  };
-
   // Build report
   const lines: string[] = [];
   lines.push('# Companion Banter QC Findings');
@@ -154,16 +155,15 @@ async function main(argv: string[]): Promise<void> {
   lines.push(`| Failed | ${failed} |`);
   lines.push(`| Pass Rate | ${(passRate * 100).toFixed(1)}% |`);
   lines.push(`| Judge Failures | ${judgeFailures} |`);
-  lines.push(`| Escalations | ${judged - passed} |`);
+  lines.push(`| Escalations (gave up) | ${escalated} |`);
   lines.push('');
 
   lines.push('## Per-Criterion Analysis');
   lines.push('');
   lines.push(`| Criterion | Mean | Min |`);
   lines.push(`|---|---|---|`);
-  for (const crit of criteria) {
-    const stat = criteriaStats[crit];
-    lines.push(`| ${crit} | ${stat.mean.toFixed(1)} | ${stat.min} |`);
+  for (const { crit, mean, min } of criteriaStats) {
+    lines.push(`| ${crit} | ${mean.toFixed(1)} | ${min} |`);
   }
   lines.push('');
 
@@ -190,8 +190,8 @@ async function main(argv: string[]): Promise<void> {
   lines.push('');
   lines.push(`| Persona | Judged | Passed | Pass Rate |`);
   lines.push(`|---|---|---|---|`);
-  for (const [persona, stat] of Array.from(personaStats.entries()).sort()) {
-    const rate = stat.total > 0 ? (stat.passed / stat.total * 100).toFixed(1) : '0.0';
+  for (const [persona, stat] of Array.from(personaStats.entries()).sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const rate = stat.total > 0 ? ((stat.passed / stat.total) * 100).toFixed(1) : '0.0';
     lines.push(`| ${persona} | ${stat.total} | ${stat.passed} | ${rate}% |`);
   }
   lines.push('');
@@ -200,7 +200,46 @@ async function main(argv: string[]): Promise<void> {
   lines.push('');
   lines.push('_Findings only — Scrapcraft source untouched (trial discipline)._');
 
-  const body = lines.join('\n') + '\n';
+  return lines.join('\n') + '\n';
+}
+
+function argValue(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i !== -1 ? args[i + 1] : undefined;
+}
+
+async function main(argv: string[]): Promise<void> {
+  const args = argv.slice(2);
+  const ledgerPathArg = args.find((a) => !a.startsWith('--') && a !== argValue(args, '--out') && a !== argValue(args, '--worst'));
+  const outArg = argValue(args, '--out');
+  const worstArg = argValue(args, '--worst');
+
+  let worstCount = 15;
+  if (worstArg !== undefined) {
+    const n = parseInt(worstArg, 10);
+    if (Number.isFinite(n) && n > 0) worstCount = n;
+  }
+
+  const ledgerPath = ledgerPathArg !== undefined ? path.resolve(REPO_ROOT, ledgerPathArg) : undefined;
+
+  if (!ledgerPath || !fs.existsSync(ledgerPath)) {
+    console.error('usage: node findings.ts <ledger.jsonl> --out <report.md> [--worst N]');
+    process.exit(1);
+  }
+
+  const outPath = outArg !== undefined ? path.resolve(REPO_ROOT, outArg) : undefined;
+
+  // Verify hash chain first
+  const ledger = new Ledger(ledgerPath);
+  const verify = await ledger.verify();
+
+  // Collect final entries per runId (retries supersede — later entries win)
+  const lastEntries = new Map<string, LedgerEntry>();
+  for await (const entry of ledger.stream()) {
+    lastEntries.set(entry.runId, entry);
+  }
+
+  const body = buildFindingsReport(lastEntries, verify, worstCount);
 
   if (outPath) {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -211,4 +250,11 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-main(process.argv);
+const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMain) {
+  main(process.argv).catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

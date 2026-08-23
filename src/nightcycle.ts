@@ -161,11 +161,12 @@ async function main(argv: string[]): Promise<void> {
   }
   const report = await runNightCycle(ledgerPath);
   const out = args.indexOf('--out');
+  const outPath = out !== -1 ? args[out + 1] : undefined;
   const body = flags.has('--json') ? JSON.stringify(report, null, 2) + '\n' : renderReport(report);
-  if (out !== -1 && args[out + 1]) {
-    fs.mkdirSync(path.dirname(args[out + 1]), { recursive: true });
-    fs.writeFileSync(args[out + 1], body);
-    console.error(`nightcycle: report written to ${args[out + 1]} (${report.entries} entries, ${report.alignments.length} alignments)`);
+  if (outPath) {
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, body);
+    console.error(`nightcycle: report written to ${outPath} (${report.entries} entries, ${report.alignments.length} alignments)`);
   } else {
     process.stdout.write(body);
   }
