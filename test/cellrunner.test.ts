@@ -1,0 +1,315 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import test from 'node:test';
+import * as assert from 'node:assert';
+import { runCell, type CellAdapter } from '../src/cellrunner.ts';
+import { Ledger, type Verdict } from '../src/ledger.ts';
+import { freeze, type FrozenState } from '../src/frozens.ts';
+
+// Test fixtures
+function makeTmpDir(): string {
+  return fs.mkdtempSync(path.join('/tmp', 'saddle-cellrunner-'));
+}
+
+function cleanup(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+// Mock adapter: controlled behavior for testing
+function makeMockAdapter(behavior: 'success' | 'transport-error' | 'parse-error'): CellAdapter {
+  return {
+    name: 'mock-adapter',
+    async call(input) {
+      if (behavior === 'transport-error') {
+        throw new Error('network timeout');
+      }
+      if (behavior === 'parse-error') {
+        return { raw: 'garbage output', latencyMs: 10 };
+      }
+      return {
+        raw: JSON.stringify({ pass: true, reason: 'looks good' }),
+        latencyMs: 42,
+      };
+    },
+  };
+}
+
+// Test alignment draft
+const testDraft = {
+  id: 'test-judge',
+  model: 'gpt-4',
+  useCase: 'test-cell',
+  prompt: 'You are a test judge.',
+  inputFilters: [],
+  outputFilters: [],
+  params: { temperature: 0.5, maxTokens: 100 },
+  directiveChunks: ['chunk1', 'chunk2'],
+};
+
+test('cellrunner: happy path — one entry, success verdict, debit has full context', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const ledgerPath = path.join(tmpDir, 'ledger.jsonl');
+
+    // Freeze the test alignment.
+    const frozen = freeze(frozenDir, testDraft);
+
+    const ledger = new Ledger(ledgerPath);
+    const testInput = { lineId: 'L001', text: 'hello world' };
+
+    const result = await runCell({
+      frozenDir,
+      alignmentId: frozen.alignmentId,
+      cellId: 'test/judge',
+      runId: 'run-001',
+      input: testInput,
+      buildUserPrompt: (input) => `Judge this: ${JSON.stringify(input)}`,
+      parseCredit: (raw) => {
+        const parsed = JSON.parse(raw);
+        const verdict: Verdict = parsed.pass ? 'worked' : 'failed';
+        return { credit: parsed, verdict };
+      },
+      ledger,
+      adapter: makeMockAdapter('success'),
+    });
+
+    assert.strictEqual(result.entries.length, 1, 'should have 1 entry');
+    assert.strictEqual(result.final.verdict, 'worked', 'verdict should be worked');
+    assert.strictEqual(result.final.escalated, false, 'should not be escalated');
+    assert.strictEqual(result.final.note, undefined, 'should have no note');
+
+    // Verify debit structure.
+    const debit = JSON.parse(result.final.debit);
+    assert.deepStrictEqual(debit.prompt.system, frozen.prompt, 'debit has system prompt');
+    assert.ok(debit.prompt.user.includes('hello world'), 'debit has user prompt');
+    assert.deepStrictEqual(debit.input, testInput, 'debit has domain input');
+    assert.strictEqual(debit.model, frozen.model, 'debit has model');
+    assert.deepStrictEqual(debit.params, frozen.params, 'debit has params');
+    assert.strictEqual(debit.adapter, 'mock-adapter', 'debit has adapter name');
+
+    // Verify credit.
+    const credit = JSON.parse(result.final.credit);
+    assert.strictEqual(credit.pass, true, 'credit has pass');
+
+    // Verify chain integrity.
+    const verify = await ledger.verify();
+    assert.strictEqual(verify.ok, true, 'hash chain should verify');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner: retry on parse error — two entries with retryOf linkage', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const ledgerPath = path.join(tmpDir, 'ledger.jsonl');
+
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(ledgerPath);
+
+    // First adapter fails to parse, second succeeds.
+    let attemptCount = 0;
+    const adapter: CellAdapter = {
+      name: 'retry-test-adapter',
+      async call(input) {
+        attemptCount++;
+        if (attemptCount === 1) {
+          return { raw: 'garbage', latencyMs: 10 };
+        }
+        return { raw: JSON.stringify({ pass: true, reason: 'ok' }), latencyMs: 15 };
+      },
+    };
+
+    const result = await runCell({
+      frozenDir,
+      alignmentId: frozen.alignmentId,
+      cellId: 'test/judge',
+      runId: 'run-001',
+      input: { text: 'test' },
+      buildUserPrompt: () => 'test',
+      parseCredit: (raw) => {
+        const parsed = JSON.parse(raw); // throws on 'garbage'
+        return { credit: parsed, verdict: parsed.pass ? 'worked' : 'failed' };
+      },
+      ledger,
+      adapter,
+      maxAttempts: 2,
+    });
+
+    assert.strictEqual(result.entries.length, 2, 'should have 2 entries (attempt + retry)');
+
+    // First entry: failed parse, not escalated.
+    const first = result.entries[0]!;
+    assert.strictEqual(first.verdict, 'failed', 'first attempt should be failed');
+    assert.strictEqual(first.escalated, false, 'first attempt should not escalate');
+    assert.ok(first.note?.includes('attempt 1:'), 'first note should indicate attempt 1');
+    assert.strictEqual(first.retryOf, undefined, 'first entry should have no retryOf');
+
+    // Second entry: success, retryOf points to first.
+    const second = result.entries[1]!;
+    assert.strictEqual(second.verdict, 'worked', 'second attempt should succeed');
+    assert.strictEqual(second.escalated, false, 'second attempt should not escalate');
+    assert.strictEqual(second.retryOf, first.seq, 'second should point to first via retryOf');
+    assert.strictEqual(second.note, undefined, 'second should have no note');
+
+    // Verify chain.
+    const verify = await ledger.verify();
+    assert.strictEqual(verify.ok, true, 'hash chain should verify');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner: both attempts fail — escalated=true, gave-up note', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const ledgerPath = path.join(tmpDir, 'ledger.jsonl');
+
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(ledgerPath);
+
+    const adapter: CellAdapter = {
+      name: 'fail-adapter',
+      async call() {
+        throw new Error('network timeout');
+      },
+    };
+
+    const result = await runCell({
+      frozenDir,
+      alignmentId: frozen.alignmentId,
+      cellId: 'test/judge',
+      runId: 'run-001',
+      input: { text: 'test' },
+      buildUserPrompt: () => 'test',
+      parseCredit: () => ({ credit: {}, verdict: 'worked' }),
+      ledger,
+      adapter,
+      maxAttempts: 2,
+    });
+
+    assert.strictEqual(result.entries.length, 2, 'should have 2 failed entries');
+
+    // First entry: failed, not escalated.
+    const first = result.entries[0]!;
+    assert.strictEqual(first.verdict, 'failed');
+    assert.strictEqual(first.escalated, false);
+    assert.ok(first.note?.includes('attempt 1:'));
+    assert.ok(first.note?.includes('network timeout'));
+
+    // Second entry: failed, escalated=true.
+    const second = result.entries[1]!;
+    assert.strictEqual(second.verdict, 'failed');
+    assert.strictEqual(second.escalated, true, 'final attempt should escalate');
+    assert.ok(second.note?.startsWith('gave up:'), 'final note should start with "gave up:"');
+    assert.ok(second.note?.includes('attempt 2:'));
+    assert.strictEqual(second.retryOf, first.seq);
+
+    // Verify chain.
+    const verify = await ledger.verify();
+    assert.strictEqual(verify.ok, true, 'hash chain should verify');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner: tampered frozen state throws before ledger append', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const ledgerPath = path.join(tmpDir, 'ledger.jsonl');
+
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(ledgerPath);
+
+    // Tamper with the frozen file.
+    const frozenFile = path.join(frozenDir, `${frozen.alignmentId}.json`);
+    const tampered = { ...frozen, prompt: 'HACKED' };
+    fs.chmodSync(frozenFile, 0o644); // a dishonest clerk needs write permission first
+    fs.writeFileSync(frozenFile, JSON.stringify(tampered) + '\n');
+
+    const adapter = makeMockAdapter('success');
+
+    // Should throw during thaw, before any ledger entry is appended.
+    await assert.rejects(
+      async () => {
+        await runCell({
+          frozenDir,
+          alignmentId: frozen.alignmentId,
+          cellId: 'test/judge',
+          runId: 'run-001',
+          input: { text: 'test' },
+          buildUserPrompt: () => 'test',
+          parseCredit: () => ({ credit: {}, verdict: 'worked' }),
+          ledger,
+          adapter,
+        });
+      },
+      (err) => {
+        assert.ok(
+          err instanceof Error && err.message.includes('failed verification'),
+          'should throw on hash mismatch'
+        );
+        return true;
+      }
+    );
+
+    // Verify no ledger entry was appended.
+    const count = await ledger.count();
+    assert.strictEqual(count, 0, 'no entry should be appended on thaw failure');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner: adapter transport error is caught and retried', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const ledgerPath = path.join(tmpDir, 'ledger.jsonl');
+
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(ledgerPath);
+
+    let attemptCount = 0;
+    const adapter: CellAdapter = {
+      name: 'flaky-adapter',
+      async call() {
+        attemptCount++;
+        if (attemptCount === 1) {
+          throw new Error('connection reset');
+        }
+        return { raw: JSON.stringify({ ok: true }), latencyMs: 20 };
+      },
+    };
+
+    const result = await runCell({
+      frozenDir,
+      alignmentId: frozen.alignmentId,
+      cellId: 'test/judge',
+      runId: 'run-001',
+      input: { text: 'test' },
+      buildUserPrompt: () => 'test',
+      parseCredit: (raw) => {
+        const parsed = JSON.parse(raw);
+        return { credit: parsed, verdict: 'worked' };
+      },
+      ledger,
+      adapter,
+      maxAttempts: 2,
+    });
+
+    assert.strictEqual(result.entries.length, 2, 'should have 2 entries');
+    assert.strictEqual(result.final.verdict, 'worked', 'should succeed on second attempt');
+    assert.strictEqual(result.final.escalated, false);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
