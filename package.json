@@ -14,7 +14,7 @@
   },
   "main": "./src/index.ts",
   "scripts": {
-    "test": "node --test test/*.test.ts",
+    "test": "node --test test/*.test.ts field/field-trial-1/*.test.ts",
     "nightcycle": "node src/nightcycle.ts",
     "typecheck": "tsc --noEmit"
   },

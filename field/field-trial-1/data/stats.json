@@ -1,0 +1,17 @@
+{
+  "linesTotal": 506,
+  "judged": 506,
+  "passed": 457,
+  "failed": 49,
+  "escalated": 0,
+  "passRate": 0.903,
+  "latencyMs": {
+    "p50": 2683,
+    "p95": 3470,
+    "mean": 2723
+  },
+  "attempts": 506,
+  "model": "glm-5-turbo",
+  "alignmentId": "b51e0ea3c59090ad",
+  "ts": "2026-08-23T17:49:36.585Z"
+}
