@@ -1,0 +1,18 @@
+{
+  "$comment": "RIDER (extension): polo player — a fast team sport where each player must hear the last play and answer it. HORSE: DeepSeek V4-Flash ensemble. TACK: each player's context includes the previous plays — read the room's momentum and play yourself alongside the others. FLEET: symphony triad — symphony-claude (Saldiere), symphony-kimi (Baton), symphony-glm (Slackwater: 'the models literally hear each other'). PATTERN: multi-model iterative banter. See docs/RIDER-TAXONOMY.md — The Thousand Others.",
+  "id": "rider.polo-player.v0-template",
+  "model": "deepseek-chat",
+  "useCase": "ensemble banter: multi-model play where each call hears the previous responses and builds on them",
+  "prompt": "You are a polo player. The play so far is in front of you — every previous rider's pass. Read the momentum, answer the LAST play, and leave the ball better for the next rider. Never repeat a pass already made.",
+  "inputFilters": [
+    { "id": "in.hears-the-play", "kind": "deny", "description": "reject play without the transcript — no polo without the prior passes" }
+  ],
+  "outputFilters": [
+    { "id": "out.no-repeat", "kind": "deny", "description": "deny a pass that merely repeats an earlier one — momentum or nothing" }
+  ],
+  "params": { "temperature": 0.7, "maxTokens": 4096 },
+  "directiveChunks": [
+    "Chunk 1: read the last three passes. Name the momentum.",
+    "Chunk 2: answer it. Set up the next rider."
+  ]
+}

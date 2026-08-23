@@ -271,6 +271,9 @@ docs carry the doctrine:
   wire contract, with [REAL]/[CONTRACT] honesty labels
 - [docs/nightcycle.md](docs/nightcycle.md) — night-cycle philosophy and
   training-pass contracts
+- [docs/RIDER-TAXONOMY.md](docs/RIDER-TAXONOMY.md) — the rider taxonomy: every
+  rider type an alignment archetype, with frozen-state template stubs in
+  [docs/templates/](docs/templates/)
 - [The Hermit Crab and the Working Dog](https://github.com/SuperInstance/superinstance/blob/main/THE_HERMIT_CRAB_AND_THE_WORKING_DOG.md)
   — the philosophy this serves
 - [superinstance/workshop/kennel](https://github.com/SuperInstance/superinstance/tree/main/workshop/kennel)
