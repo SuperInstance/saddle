@@ -4,6 +4,7 @@ dist/
 .ENV
 .env
 .env.*
-data/
+/data/
+!field/**/data/
 *.local
 .DS_Store
