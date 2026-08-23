@@ -2,18 +2,7 @@
 
 # 🤠 SADDLE
 
-```
- ███████╗ █████╗ ████████╗██╗     ██╗
- ██╔════╝██╔══██╗╚══██╔══╝██║     ██║
- ███████╗███████║   ██║   ██║     ██║
- ╚════██║██╔══██║   ██║   ██║     ██║
- ███████║██║  ██║   ██║   ███████╗███████╗
- ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚══════╝
-the cowboy's gear ·
-  harness toolkit for the fleet
-```
-
-<p align="center"><img src="docs/images/saddle-hero.jpg" alt="The cowboy's gear — a saddle on a fence at golden hour, the dog at watch" width="720"></p>
+<p align="center"><img src="docs/images/saddle-hero.jpg" alt="The cowboy's gear — hand-tooled leather on the driftwood fence, golden hour, the collie at watch" width="760"></p>
 
 **The general-purpose, highly-functional harness toolkit.** Pincher is the nerve.
 Saddle is the gear the cowboy rides with.
