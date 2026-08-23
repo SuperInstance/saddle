@@ -20,6 +20,13 @@ import type { LedgerEntry } from './ledger.ts';
 
 export const EARNED_KEEP_THRESHOLD = 0.75; // keep ratio an alignment must clear
 
+/** What the night cycle suggests the cowboy do with an alignment. Data only —
+ *  saddle never auto-mutates frozens or alignments. */
+export interface AlignmentSuggestion {
+  action: 'keep' | 'thaw' | 'refreeze';
+  reason: string;
+}
+
 export interface AlignmentStat {
   alignmentId: string;
   worked: number;
@@ -27,6 +34,7 @@ export interface AlignmentStat {
   escalated: number;
   keepRatio: number;
   earnedKeep: boolean;
+  suggestion: AlignmentSuggestion;
 }
 
 export interface CellStat {
@@ -46,6 +54,32 @@ export interface NightCycleReport {
   alignments: AlignmentStat[];
   cells: CellStat[];
   escalations: Array<Pick<LedgerEntry, 'seq' | 'cellId' | 'alignmentId' | 'note'>>;
+  /** same data as `escalations`, named for the mission. Migrate consumers to
+   * this field — `escalations` is the deprecation candidate (back-compat keeps both). */
+  cowboyNeeded: Array<Pick<LedgerEntry, 'seq' | 'cellId' | 'alignmentId' | 'note'>>;
+}
+
+/**
+ * Suggest an action for one alignment. Data only — the cowboy pulls the lever.
+ *   thaw     — keepRatio below EARNED_KEEP_THRESHOLD, or escalation-heavy
+ *              (>20% of entries escalated)
+ *   refreeze — earned its keep, proven (≥20 worked), and very stable (≥0.95):
+ *              a candidate to pin/re-freeze as a canonical state
+ *   keep     — everything else, and always when samples < 5 (insufficient data)
+ */
+export function suggestForAlignment(a: AlignmentStat): AlignmentSuggestion {
+  const total = a.worked + a.failed;
+  if (total < 5) return { action: 'keep', reason: 'insufficient data' };
+  if (a.keepRatio < EARNED_KEEP_THRESHOLD) {
+    return { action: 'thaw', reason: `keep ratio ${pct(a.keepRatio)} is below the ${pct(EARNED_KEEP_THRESHOLD)} threshold` };
+  }
+  if (a.escalated > 0 && a.escalated / total > 0.2) {
+    return { action: 'thaw', reason: `escalation rate ${pct(a.escalated / total)} exceeds 20%` };
+  }
+  if (a.earnedKeep && a.worked >= 20 && a.keepRatio >= 0.95) {
+    return { action: 'refreeze', reason: `stable and proven: ${a.worked} worked at ${pct(a.keepRatio)} keep ratio` };
+  }
+  return { action: 'keep', reason: 'performing within tolerance' };
 }
 
 /**
@@ -71,7 +105,10 @@ export async function runNightCycle(ledgerPath: string): Promise<NightCycleRepor
       escalations.push({ seq: e.seq, cellId: e.cellId, alignmentId: e.alignmentId, note: e.note });
     }
 
-    const a = alignments.get(e.alignmentId) ?? { alignmentId: e.alignmentId, worked: 0, failed: 0, escalated: 0, keepRatio: 0, earnedKeep: false };
+    const a = alignments.get(e.alignmentId) ?? {
+      alignmentId: e.alignmentId, worked: 0, failed: 0, escalated: 0,
+      keepRatio: 0, earnedKeep: false, suggestion: { action: 'keep', reason: 'insufficient data' },
+    };
     if (e.verdict === 'worked') a.worked++;
     else a.failed++;
     if (e.escalated) a.escalated++;
@@ -88,6 +125,7 @@ export async function runNightCycle(ledgerPath: string): Promise<NightCycleRepor
     const total = a.worked + a.failed;
     a.keepRatio = total === 0 ? 0 : a.worked / total;
     a.earnedKeep = a.keepRatio >= EARNED_KEEP_THRESHOLD;
+    a.suggestion = suggestForAlignment(a);
   }
 
   return {
@@ -100,6 +138,7 @@ export async function runNightCycle(ledgerPath: string): Promise<NightCycleRepor
     alignments: [...alignments.values()].sort((x, y) => y.keepRatio - x.keepRatio),
     cells: [...cells.values()].sort((x, y) => y.failed - x.failed || x.cellId.localeCompare(y.cellId)),
     escalations,
+    cowboyNeeded: escalations.map((e) => ({ ...e })),
   };
 }
 
@@ -129,6 +168,18 @@ export function renderReport(r: NightCycleReport): string {
     lines.push(`| \`${c.cellId}\` | ${c.worked} | ${c.failed} | ${c.escalated} |`);
   }
   if (r.cells.length > 25) lines.push(`| _…${r.cells.length - 25} more cells_ | | | |`);
+  lines.push('');
+  lines.push('## Suggested actions');
+  lines.push('');
+  lines.push('| alignment | action | reason |');
+  lines.push('|---|---|---|');
+  if (r.alignments.length === 0) lines.push('| _(empty ledger)_ | | |');
+  for (const a of r.alignments) {
+    lines.push(`| \`${a.alignmentId}\` | ${a.suggestion.action} | ${a.suggestion.reason} |`);
+  }
+  lines.push('');
+  lines.push('_Suggestions are data only — saddle never auto-mutates frozens or alignments. The cowboy decides._');
+  lines.push('_A suggestion is an advisory snapshot of the ledger at generation time; it does not consult in-flight runs._');
   lines.push('');
   lines.push('## Attention list — escalations for the cowboy');
   lines.push('');
@@ -161,11 +212,12 @@ async function main(argv: string[]): Promise<void> {
   }
   const report = await runNightCycle(ledgerPath);
   const out = args.indexOf('--out');
+  const outPath = out !== -1 ? args[out + 1] : undefined;
   const body = flags.has('--json') ? JSON.stringify(report, null, 2) + '\n' : renderReport(report);
-  if (out !== -1 && args[out + 1]) {
-    fs.mkdirSync(path.dirname(args[out + 1]), { recursive: true });
-    fs.writeFileSync(args[out + 1], body);
-    console.error(`nightcycle: report written to ${args[out + 1]} (${report.entries} entries, ${report.alignments.length} alignments)`);
+  if (outPath) {
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, body);
+    console.error(`nightcycle: report written to ${outPath} (${report.entries} entries, ${report.alignments.length} alignments)`);
   } else {
     process.stdout.write(body);
   }
