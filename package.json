@@ -1,0 +1,36 @@
+{
+  "name": "saddle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The cowboy's gear: general-purpose harness toolkit for the fleet. Double-entry ledger per cell, frozen alignment states, night cycles. Works with pincher (reflex shell).",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/SuperInstance/saddle.git"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "nightcycle": "node src/nightcycle.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  },
+  "keywords": [
+    "harness",
+    "alignment",
+    "ledger",
+    "double-entry",
+    "frozen-states",
+    "night-cycle",
+    "cell-decomposition",
+    "quilt",
+    "pincher",
+    "fleet"
+  ]
+}
