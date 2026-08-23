@@ -80,7 +80,11 @@ export function entryHash(entry: Omit<LedgerEntry, 'hash'>): string {
 const TAIL_WINDOW = 64 * 1024; // bytes to inspect from the end for O(1) tail
 
 export class Ledger {
-  constructor(readonly filePath: string) {}
+  readonly filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
 
   /** Append one double-entry. Returns the full, hash-chained entry. */
   append(input: NewEntry): LedgerEntry {
