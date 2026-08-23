@@ -218,6 +218,22 @@ test('extract-lines: sequential ID generation', () => {
   assert.equal(lines[2]!.id, 'L0003');
 });
 
+test('extract-lines: party OBJECTIONS string banks extracted, no textless records (foreman bug 7)', () => {
+  // OBJECTIONS is Record<persona, string[]> — the old walker read entry.line off
+  // strings, emitting one garbage textless record and deduping the rest away on
+  // undefined. Strings must be extracted; textless records must never exist.
+  const party = {
+    crosstalk: { bolt: [{ on: 'crash', line: 'corner two again' }] },
+    objections: { bolt: ['Track first.', 'Bench later.'], juno: ['Point of order!'] },
+  };
+  const lines = extractLines({}, {}, [], [], {}, party);
+  const objections = lines.filter((l) => l.bank.startsWith('party.objections'));
+  assert.equal(objections.length, 3);
+  assert.ok(objections.every((l) => typeof l.text === 'string' && l.text.length > 0));
+  assert.ok(lines.some((l) => l.text === 'corner two again' && l.gate === 'crash'));
+  assert.ok(lines.every((l) => typeof l.text === 'string')); // the textless guard
+});
+
 test('extract-lines: CLI paths resolve inside the repo root — no stray files above it (foreman bug 5)', () => {
   // This script lives at <repo>/field/field-trial-1/ — repo root is two levels up.
   assert.equal(REPO_ROOT, path.resolve(__dirname, '../..'));

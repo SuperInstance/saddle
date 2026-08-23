@@ -39,7 +39,8 @@ export interface PartyEntry {
 
 export interface PartyModule {
   crosstalk?: Record<string, PartyEntry[]>;
-  objections?: Record<string, PartyEntry[]>;
+  /** OBJECTIONS banks are plain string arrays */
+  objections?: Record<string, string[]>;
 }
 
 export interface RoundnessNode {
@@ -106,8 +107,10 @@ export function extractLines(
   let nextId = 1;
 
   const add = (record: Omit<ExtractedLine, 'id'>) => {
-    if (seen.has(record.text)) return;
-    seen.add(record.text);
+    const text = typeof record.text === 'string' ? record.text : undefined;
+    if (text === undefined) return; // never emit a textless record (walker guard)
+    if (seen.has(text)) return;
+    seen.add(text);
     const id = `L${String(nextId).padStart(4, '0')}`;
     nextId++;
     lines.push({ id, ...record });
@@ -228,11 +231,14 @@ export function extractLines(
   ] as Array<[string, Record<string, PartyEntry[]> | undefined]>) {
     for (const [personaId, entries] of Object.entries(section ?? {})) {
       for (const entry of entries ?? []) {
+        // OBJECTIONS banks are plain string arrays; CROSSTALK banks are {on, line}
+        const text = typeof entry === 'string' ? entry : entry.line;
+        if (typeof text !== 'string') continue;
         add({
           persona: personaId,
           bank: `party.${bank}.${personaId}`,
-          text: entry.line,
-          ...(gateText(entry.on) !== undefined ? { gate: gateText(entry.on) } : {}),
+          text,
+          ...(typeof entry !== 'string' && gateText(entry.on) !== undefined ? { gate: gateText(entry.on) } : {}),
         });
       }
     }
