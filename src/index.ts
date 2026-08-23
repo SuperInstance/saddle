@@ -7,9 +7,9 @@
  * report runner). The doctrine lives in the docs.
  */
 
-export { Ledger, entryHash } from './ledger.ts';
+export { Ledger, entryHash, resolveVerdictKind } from './ledger.ts';
 export { WorkflowValidationError } from './cells.ts';
-export type { LedgerEntry, NewEntry, Verdict, VerifyResult } from './ledger.ts';
+export type { LedgerEntry, NewEntry, Verdict, VerdictKind, VerifyResult } from './ledger.ts';
 
 export { freeze, thaw, listFrozen, verifyFrozen, manifestHash } from './frozens.ts';
 export type { AlignmentDraft, FrozenState, FilterSpec, FilterKind } from './frozens.ts';
@@ -47,7 +47,20 @@ export type {
 } from './cells.ts';
 
 export { runNightCycle, renderReport, suggestForAlignment, EARNED_KEEP_THRESHOLD } from './nightcycle.ts';
-export type { NightCycleReport, AlignmentStat, AlignmentSuggestion, CellStat } from './nightcycle.ts';
+export type { NightCycleReport, AlignmentStat, AlignmentSuggestion, AlignmentTokens, CellStat } from './nightcycle.ts';
+
+// quorum — N frozen judge alignments, one strict-majority verdict, one summary
+// entry in the books (field-trial-1 gap 4: single judge, single opinion).
+export { runQuorumCell } from './quorum.ts';
+export type {
+  QuorumJudgeSpec,
+  QuorumJudgeOutcome,
+  QuorumMajority,
+  QuorumVotes,
+  QuorumDissent,
+  QuorumResult,
+  RunQuorumCellOptions,
+} from './quorum.ts';
 
 export { canonicalJson, fnv1a64, hashValue } from './hash.ts';
 
@@ -55,5 +68,5 @@ export { canonicalJson, fnv1a64, hashValue } from './hash.ts';
 // adapter. Companion to CellRunner (workflows of many cells): different seam
 // on purpose — CellAdapter returns RAW transport output + parseCredit decides
 // the verdict, because a pinned cell's books must show the raw credit.
-export { runCell } from './cellrunner.ts';
-export type { CellAdapter, CellRequest, RunCellOptions, RunCellResult } from './cellrunner.ts';
+export { runCell, estimateUsage } from './cellrunner.ts';
+export type { CellAdapter, CellRequest, RunCellOptions, RunCellResult, Usage } from './cellrunner.ts';

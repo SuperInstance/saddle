@@ -5,7 +5,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { Ledger } from '../src/ledger.ts';
-import { entryHash } from '../src/ledger.ts';
+import { entryHash, resolveVerdictKind } from '../src/ledger.ts';
+import type { LedgerEntry, NewEntry } from '../src/ledger.ts';
 
 function tmpLedger(): { dir: string; ledger: Ledger } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'saddle-ledger-'));
@@ -111,3 +112,71 @@ test('empty or missing ledger verifies ok and counts zero', async () => {
   assert.equal(v.checked, 0);
   assert.equal(ledger.tailEntry(), null);
 });
+
+// ---------------------------------------------------------------------------
+// v3: verdictKind — additive schema migration (old ledgers untouched)
+// ---------------------------------------------------------------------------
+
+test('append without verdictKind leaves the field absent (legacy shape preserved)', async () => {
+  const { ledger } = tmpLedger();
+  const e = ledger.append({ cellId: 'c', runId: 'r', alignmentId: 'al', debit: 1, credit: 2, verdict: 'worked', escalated: false });
+  assert.equal('verdictKind' in e, false, 'no verdictKind key at all — not undefined');
+  const v = await ledger.verify();
+  assert.equal(v.ok, true);
+});
+
+test('verdictKind is stored, round-trips, and participates in the hash', async () => {
+  const { ledger } = tmpLedger();
+  const e = ledger.append({ cellId: 'c', runId: 'r', alignmentId: 'al', debit: {}, credit: {}, verdict: 'failed', verdictKind: 'judgment-fail', escalated: false });
+  assert.equal(e.verdictKind, 'judgment-fail');
+  const tail = ledger.tailEntry();
+  assert.equal(tail?.verdictKind, 'judgment-fail');
+
+  // changing verdictKind must change the hash — it is part of the entry
+  const forged = { ...e, verdictKind: 'execution-error' as const };
+  assert.notEqual(entryHash(forged), e.hash);
+  const v = await ledger.verify();
+  assert.equal(v.ok, true, 'verdictKind-bearing entries still verify');
+});
+
+test('resolveVerdictKind: explicit verdictKind passes through as-is', () => {
+  const kinds = ['worked', 'judgment-fail', 'execution-error', 'escalated'] as const;
+  for (const kind of kinds) {
+    const e = ledgerEntryWith({ verdictKind: kind });
+    assert.equal(resolveVerdictKind(e), kind);
+  }
+});
+
+test('resolveVerdictKind: legacy entries classified from verdict/escalated/credit', () => {
+  // escalated wins first
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', escalated: true })), 'escalated');
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', escalated: true, credit: { pass: true } })), 'escalated');
+  // worked is worked
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'worked', escalated: false })), 'worked');
+  // old core cellrunner string credits → execution errors
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: 'parse failed: not json' })), 'execution-error');
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: 'adapter error: timeout' })), 'execution-error');
+  // field-trial style {error} object credits → execution errors
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: { error: 'boom' } })), 'execution-error');
+  // clean credits under a failed verdict → completed QC judgments
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: { pass: false, reason: 'out of voice' } })), 'judgment-fail');
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: {} })), 'judgment-fail');
+  assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: 'judge says no' })), 'judgment-fail');
+});
+
+/** Build a minimal entry shaped like a ledger row (credit value gets JSON-encoded). */
+function ledgerEntryWith(over: Partial<NewEntry> & { credit?: unknown }): LedgerEntry {
+  const base: NewEntry = { cellId: 'c', runId: 'r', alignmentId: 'al', debit: {}, credit: {}, verdict: 'failed', escalated: false };
+  const merged = { ...base, ...over };
+  return {
+    seq: 1, ts: '2026-01-01T00:00:00Z',
+    cellId: merged.cellId, runId: merged.runId, alignmentId: merged.alignmentId,
+    debit: JSON.stringify(merged.debit ?? null),
+    credit: JSON.stringify(merged.credit ?? null),
+    verdict: merged.verdict,
+    escalated: merged.escalated,
+    ...(merged.verdictKind !== undefined ? { verdictKind: merged.verdictKind } : {}),
+    prevHash: '',
+    hash: 'deadbeef',
+  };
+}
