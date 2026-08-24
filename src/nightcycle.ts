@@ -30,7 +30,9 @@ import * as path from 'node:path';
 import { Ledger } from './ledger.ts';
 import type { LedgerEntry } from './ledger.ts';
 import { resolveVerdictKind } from './ledger.ts';
-import { thaw } from './frozens.ts';
+import { thaw, thawScoped } from './frozens.ts';
+import { canonicalResultOf } from './canonical.ts';
+import type { EffectScope } from './effect.ts';
 
 export const EARNED_KEEP_THRESHOLD = 0.75; // keep ratio an alignment must clear
 
@@ -133,32 +135,17 @@ export function suggestForAlignment(a: AlignmentStat): AlignmentSuggestion {
   return { action: 'keep', reason: 'performing within tolerance' };
 }
 
-/** Read `usage` off a credit JSON string; null when absent/unreadable. */
+/** Read `usage` off an entry via the v4 canonical-value seam (SEAM-REPORT
+ *  §1.1): one derivation, two consumers. null when absent/unreadable. */
 function usageOf(entry: LedgerEntry): { promptTokens: number; completionTokens: number; totalTokens: number; estimated: boolean } | null {
-  try {
-    const credit = JSON.parse(entry.credit) as unknown;
-    if (credit === null || typeof credit !== 'object' || Array.isArray(credit)) return null;
-    const usage = (credit as Record<string, unknown>).usage;
-    if (usage === null || typeof usage !== 'object' || Array.isArray(usage)) return null;
-    const u = usage as Record<string, unknown>;
-    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-    if (u.promptTokens === undefined && u.completionTokens === undefined && u.totalTokens === undefined) return null;
-    return {
-      promptTokens: num(u.promptTokens),
-      completionTokens: num(u.completionTokens),
-      totalTokens: num(u.totalTokens),
-      estimated: u.estimated === true,
-    };
-  } catch {
-    return null;
-  }
+  return canonicalResultOf(entry).usage ?? null;
 }
 
 /**
  * Pure function of (ledger) → report. Streams; keeps counters only.
  * Cron-able: see docs/ARCHITECTURE.md for the crontab/systemd timer shape.
  */
-export async function runNightCycle(ledgerPath: string, opts?: { frozenDir?: string }): Promise<NightCycleReport> {
+export async function runNightCycle(ledgerPath: string, opts?: { frozenDir?: string; scope?: EffectScope }): Promise<NightCycleReport> {
   const ledger = new Ledger(ledgerPath);
   const cells = new Map<string, CellStat>();
   const escalations: NightCycleReport['escalations'] = [];
@@ -263,7 +250,9 @@ export async function runNightCycle(ledgerPath: string, opts?: { frozenDir?: str
     let declared: 'production' | 'task-approval' = 'production';
     if (opts?.frozenDir) {
       try {
-        const frozen = thaw(opts.frozenDir, alignmentId);
+        const frozen = opts.scope
+          ? thawScoped(opts.scope, opts.frozenDir, alignmentId)
+          : thaw(opts.frozenDir, alignmentId);
         if (frozen.earnedKeepMetric === 'task-approval') declared = 'task-approval';
       } catch {
         // frozen state missing/unreadable — fall back to the default metric, report it as undeclared
