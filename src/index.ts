@@ -11,11 +11,14 @@ export { Ledger, entryHash, resolveVerdictKind } from './ledger.ts';
 export { WorkflowValidationError } from './cells.ts';
 export type { LedgerEntry, NewEntry, OutcomeFact, Verdict, VerdictKind, VerifyResult } from './ledger.ts';
 
-export { freeze, thaw, listFrozen, verifyFrozen, manifestHash } from './frozens.ts';
+export { freeze, thaw, listFrozen, verifyFrozen, manifestHash, thawScoped } from './frozens.ts';
 export type { AlignmentDraft, FrozenState, FilterSpec, FilterKind } from './frozens.ts';
 
 export { GrantLedger, GrantLoosenedError } from './grants.ts';
 export type { PolicyDirection } from './grants.ts';
+
+export { EffectScope } from './effect.ts';
+export type { Disposer } from './effect.ts';
 
 export { PincherRpcClient, PincherRpcError, ReflexSpoolIngest, VerdictReturn } from './pincher.ts';
 export { PINCHER_ERR_TIMEOUT, PINCHER_ERR_TRANSPORT, PINCHER_ERR_BAD_RESPONSE } from './pincher.ts';
@@ -74,5 +77,5 @@ export type { CanonicalResult, LedgerCard } from './canonical.ts';
 // adapter. Companion to CellRunner (workflows of many cells): different seam
 // on purpose — CellAdapter returns RAW transport output + parseCredit decides
 // the verdict, because a pinned cell's books must show the raw credit.
-export { runCell, estimateUsage } from './cellrunner.ts';
+export { runCell, estimateUsage, RunTornError } from './cellrunner.ts';
 export type { CellAdapter, CellRequest, RunCellOptions, RunCellResult, Usage } from './cellrunner.ts';

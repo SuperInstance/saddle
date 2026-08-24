@@ -18,6 +18,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { hashValue, canonicalJson } from './hash.ts';
+import type { EffectScope } from './effect.ts';
 
 export type FilterKind = 'deny' | 'allow' | 'transform';
 
@@ -153,4 +154,28 @@ export function verifyFrozen(dir: string, alignmentId: string): FrozenState | nu
   } catch {
     return null;
   }
+}
+
+/**
+ * module-level scoped cache — keyed by dir + '\0' + alignmentId. Same
+ * single-process tool-library assumption as Ledger's single-writer.
+ */
+const scopedCache = new Map<string, FrozenState>();
+
+/**
+ * v4 effect-scoped activation (SEAM-REPORT §1.2): thaw ONCE per scope and
+ * cache the verified state; the disposer drops the cache entry when the
+ * scope unwinds, so a frozen-state activation cannot outlive its scope.
+ * Returns the verified FrozenState.
+ */
+export function thawScoped(scope: EffectScope, dir: string, alignmentId: string): FrozenState {
+  const key = dir + '\0' + alignmentId;
+  const cached = scopedCache.get(key);
+  if (cached) return cached;
+  const state = thaw(dir, alignmentId);
+  scopedCache.set(key, state);
+  scope.onDispose(() => {
+    scopedCache.delete(key);
+  });
+  return state;
 }

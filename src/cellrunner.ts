@@ -36,6 +36,7 @@ import { thaw } from './frozens.ts';
 import { Ledger } from './ledger.ts';
 import type { LedgerEntry, OutcomeFact, Verdict, VerdictKind } from './ledger.ts';
 import type { GrantLedger } from './grants.ts';
+import type { EffectScope } from './effect.ts';
 import { canonicalResultOf } from './canonical.ts';
 import type { CanonicalResult } from './canonical.ts';
 
@@ -68,6 +69,12 @@ export interface CellAdapter {
    * exit 0 — the facts are independent, never folded into each other.
    */
   call(request: CellRequest): Promise<{ raw: string; latencyMs: number; usage?: Usage; outcome?: OutcomeFact }> | { raw: string; latencyMs: number; usage?: Usage; outcome?: OutcomeFact };
+  /**
+   * SEAM-REPORT §1.2: optional cleanup — subprocess adapters kill children
+   * here (kill-on-unload); pure mocks omit it. Invoked by the scope's
+   * unwinding when a `scope` is passed to runCell.
+   */
+  dispose?(): void | Promise<void>;
 }
 
 export interface RunCellOptions {
@@ -87,6 +94,11 @@ export interface RunCellOptions {
   /** v4: when provided, the frozen state's declared grants are enforced
    *  (tighten-only) at load — refusal throws BEFORE any ledger append. */
   grants?: GrantLedger;
+  /** v4: when provided, the run borrows this scope — frozen activation is
+   *  cached+released by it, adapter dispose is registered against it, and
+   *  disposal mid-run tears the run down (no further attempts, no post-disposal
+   *  append). */
+  scope?: EffectScope;
 }
 
 export interface RunCellResult {
@@ -96,6 +108,17 @@ export interface RunCellResult {
    *  what replay derives is provably the same object shape as what the run
    *  computed. */
   canonical: CanonicalResult;
+}
+
+/** Thrown when a run's scope is disposed mid-run (SEAM-REPORT §1.2): the run
+ *  tears down — no further attempts, no post-disposal ledger append. */
+export class RunTornError extends Error {
+  readonly runId: string;
+  constructor(runId: string) {
+    super(`run ${runId} torn: scope disposed mid-run`);
+    this.name = 'RunTornError';
+    this.runId = runId;
+  }
 }
 
 /**
@@ -160,10 +183,29 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
     opts.grants.tightenFor(frozen.grants);
   }
 
+  // SEAM-REPORT §1.2: when a scope is provided, the run borrows it — register
+  // adapter disposal (kill-on-unload) and a torn flag. Disposal mid-run tears
+  // the run down: the in-flight adapter call can't be interrupted from here
+  // (that's the adapter's own dispose doing the kill), but once torn the run
+  // takes no further attempts and appends no further entries.
+  let torn = false;
+  if (opts.scope) {
+    const scope = opts.scope;
+    scope.onDispose(() => {
+      torn = true;
+    });
+    if (opts.adapter.dispose) {
+      scope.onDispose(() => opts.adapter.dispose!());
+    }
+  }
+
   const maxAttempts = opts.maxAttempts ?? 2;
   const entries: LedgerEntry[] = [];
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (torn) {
+      throw new RunTornError(opts.runId);
+    }
     const prompt = { system: frozen.prompt, user: opts.buildUserPrompt(opts.input) };
     const debit = {
       prompt,
