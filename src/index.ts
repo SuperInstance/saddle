@@ -14,6 +14,9 @@ export type { LedgerEntry, NewEntry, OutcomeFact, Verdict, VerdictKind, VerifyRe
 export { freeze, thaw, listFrozen, verifyFrozen, manifestHash } from './frozens.ts';
 export type { AlignmentDraft, FrozenState, FilterSpec, FilterKind } from './frozens.ts';
 
+export { GrantLedger, GrantLoosenedError } from './grants.ts';
+export type { PolicyDirection } from './grants.ts';
+
 export { PincherRpcClient, PincherRpcError, ReflexSpoolIngest, VerdictReturn } from './pincher.ts';
 export { PINCHER_ERR_TIMEOUT, PINCHER_ERR_TRANSPORT, PINCHER_ERR_BAD_RESPONSE } from './pincher.ts';
 export type {

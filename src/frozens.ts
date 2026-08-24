@@ -58,6 +58,16 @@ export interface AlignmentDraft {
    * means for this kind of cell — the nightcycle reads the declaration.
    */
   earnedKeepMetric?: 'production' | 'task-approval';
+  /**
+   * v4 monotonic grant declaration (SEAM-REPORT §1.7): the capabilities this
+   * alignment is scoped to. Enforced at frozens load by GrantLedger.tightenFor
+   * — grants only tighten within a run. Absent = undeclared (pre-v4 back-compat:
+   * activation passes through unchanged). Empty array = pure compute cell.
+   * Hashes into the manifest like every other field, so new freezes with
+   * `grants` get new content addresses; existing frozen files parse and verify
+   * unchanged (absent field absent from hash).
+   */
+  grants?: string[];
 }
 
 /** A frozen state as it lives on disk. */

@@ -35,6 +35,7 @@ import { thaw } from './frozens.ts';
 import type { FrozenState } from './frozens.ts';
 import { resolveVerdictKind } from './ledger.ts';
 import type { Ledger, LedgerEntry, Verdict, VerdictKind } from './ledger.ts';
+import { GrantLedger } from './grants.ts';
 import { hashValue } from './hash.ts';
 
 /** One seat at the table: a frozen judge alignment and its display label ('j1', ...). */
@@ -94,6 +95,9 @@ export interface RunQuorumCellOptions {
   /** SAME adapter for all judges — the frozen state is what varies */
   adapter: CellAdapter;
   maxAttempts?: number;
+  /** v4: monotonic permission policy folded by each judge at load (SEAM-REPORT
+   *  §1.7). A loosening judge throws BEFORE any fan-out/append. */
+  policy?: GrantLedger;
 }
 
 /**
@@ -117,6 +121,20 @@ export async function runQuorumCell(opts: RunQuorumCellOptions): Promise<QuorumR
   // ledger append, not halfway through the panel
   const frozens = opts.judges.map((j) => thaw(opts.frozenDir, j.alignmentId));
 
+  // SEAM-REPORT §1.7: fold each judge's declared grants into the (possibly
+  // caller-owned) policy BEFORE the fan-out — a loosening judge throws before
+  // ANY judge's first ledger entry. Re-folding below is idempotent by design.
+  let policy = opts.policy;
+  frozens.forEach((f) => {
+    if (f.grants === undefined) return;
+    if (policy === undefined) {
+      // caller passed no policy: seed from the first judge that declares grants
+      policy = new GrantLedger(f.grants);
+    } else {
+      policy.tightenFor(f.grants);
+    }
+  });
+
   const outcomes: QuorumJudgeOutcome[] = await Promise.all(
     opts.judges.map(async (judge, i) => {
       const frozen = frozens[i]!;
@@ -132,6 +150,7 @@ export async function runQuorumCell(opts: RunQuorumCellOptions): Promise<QuorumR
         ledger: opts.ledger,
         adapter: opts.adapter,
         maxAttempts: opts.maxAttempts,
+        ...(policy ? { grants: policy } : {}),
       });
       const kind = resolveVerdictKind(result.final);
       const vote: QuorumJudgeOutcome['vote'] =

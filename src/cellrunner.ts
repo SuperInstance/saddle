@@ -35,6 +35,7 @@
 import { thaw } from './frozens.ts';
 import { Ledger } from './ledger.ts';
 import type { LedgerEntry, OutcomeFact, Verdict, VerdictKind } from './ledger.ts';
+import type { GrantLedger } from './grants.ts';
 
 /** What a cell sends to whatever actually talks to a model. */
 export interface CellRequest {
@@ -81,6 +82,9 @@ export interface RunCellOptions {
   adapter: CellAdapter;
   /** total attempts (default 2: one try + one retry) */
   maxAttempts?: number;
+  /** v4: when provided, the frozen state's declared grants are enforced
+   *  (tighten-only) at load — refusal throws BEFORE any ledger append. */
+  grants?: GrantLedger;
 }
 
 export interface RunCellResult {
@@ -142,6 +146,13 @@ function outcomeOf(err: unknown): OutcomeFact | undefined {
 export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
   // thaw (and verify) BEFORE any bookkeeping — a tampered state never runs
   const frozen = thaw(opts.frozenDir, opts.alignmentId);
+
+  // SEAM-REPORT §1.7: enforce the monotonic grant policy at load — a frozen
+  // state that would loosen the run's tightened grants is refused BEFORE any
+  // ledger append, the same guard class as a tampered frozen state.
+  if (opts.grants && frozen.grants !== undefined) {
+    opts.grants.tightenFor(frozen.grants);
+  }
 
   const maxAttempts = opts.maxAttempts ?? 2;
   const entries: LedgerEntry[] = [];
