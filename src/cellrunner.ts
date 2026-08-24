@@ -34,7 +34,7 @@
 
 import { thaw } from './frozens.ts';
 import { Ledger } from './ledger.ts';
-import type { LedgerEntry, Verdict, VerdictKind } from './ledger.ts';
+import type { LedgerEntry, OutcomeFact, Verdict, VerdictKind } from './ledger.ts';
 
 /** What a cell sends to whatever actually talks to a model. */
 export interface CellRequest {
@@ -59,7 +59,12 @@ export interface Usage {
 /** Transport seam — inject a real client here; core ships only mocks. */
 export interface CellAdapter {
   name: string;
-  call(request: CellRequest): Promise<{ raw: string; latencyMs: number; usage?: Usage }> | { raw: string; latencyMs: number; usage?: Usage };
+  /**
+   * SEAM-REPORT §1.4: adapters that wrap subprocesses report orthogonal
+   * outcome facts flat; pure adapters omit them. A process can time out AND
+   * exit 0 — the facts are independent, never folded into each other.
+   */
+  call(request: CellRequest): Promise<{ raw: string; latencyMs: number; usage?: Usage; outcome?: OutcomeFact }> | { raw: string; latencyMs: number; usage?: Usage; outcome?: OutcomeFact };
 }
 
 export interface RunCellOptions {
@@ -97,6 +102,35 @@ export function estimateUsage(prompt: { system: string; user: string }, rawOutpu
 
 function errorText(err: unknown): string {
   return String(err instanceof Error ? err.message : err).slice(0, 200);
+}
+
+/**
+ * SEAM-REPORT §1.4: a transport error may carry process-level facts on an
+ * `outcome` property. Defensive: use them only when they parse as facts — a
+ * plain object with at least one of timedOut/signal/exitCode present, numbers
+ * finite, boolean boolean. Returns only the three orthogonal fields.
+ */
+function outcomeOf(err: unknown): OutcomeFact | undefined {
+  if (err === null || typeof err !== 'object') return undefined;
+  const candidate: unknown = (err as { outcome?: unknown }).outcome;
+  if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return undefined;
+  const c = candidate as Record<string, unknown>;
+  const facts: OutcomeFact = {};
+  if (c.timedOut !== undefined) {
+    if (typeof c.timedOut !== 'boolean') return undefined;
+    facts.timedOut = c.timedOut;
+  }
+  if (c.signal !== undefined) {
+    if (typeof c.signal !== 'number' || !Number.isFinite(c.signal)) return undefined;
+    facts.signal = c.signal;
+  }
+  if (c.exitCode !== undefined) {
+    if (typeof c.exitCode !== 'number' || !Number.isFinite(c.exitCode)) return undefined;
+    facts.exitCode = c.exitCode;
+  }
+  return facts.timedOut !== undefined || facts.signal !== undefined || facts.exitCode !== undefined
+    ? facts
+    : undefined;
 }
 
 /**
@@ -139,6 +173,11 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
       const usage: Usage = response.usage
         ? { ...response.usage, estimated: false }
         : estimateUsage(prompt, response.raw);
+      // SEAM-REPORT §1.4: process facts ride FLAT. They are DATA for
+      // consumers — never a classification input, never flipped into the
+      // error text. A completed parse with timedOut=true is STILL a
+      // completed judgment; facts never flip the kind.
+      const facts = response.outcome;
 
       try {
         const parsed = opts.parseCredit(response.raw);
@@ -152,11 +191,12 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
           runId: opts.runId,
           alignmentId: frozen.alignmentId,
           debit,
-          credit: { ...judgment, latencyMs, attempts: attempt, usage },
+          credit: { ...judgment, latencyMs, attempts: attempt, usage, ...facts },
           verdict: parsed.verdict,
           verdictKind: parsed.verdict === 'worked' ? 'worked' : 'judgment-fail',
           escalated: false,
           ...(retryOf !== undefined ? { retryOf } : {}),
+          ...(facts ? { outcome: facts } : {}),
         });
       } catch (err) {
         // Unparseable output — retryable execution error; give up on the last.
@@ -166,7 +206,8 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
           runId: opts.runId,
           alignmentId: frozen.alignmentId,
           debit,
-          credit: { error: msg, usage },
+          // facts are a flat SIBLING of the error string, not text inside it
+          credit: { error: msg, ...facts, usage },
           verdict: 'failed',
           verdictKind: last ? 'escalated' : 'execution-error',
           escalated: last,
@@ -174,11 +215,15 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
             ? `gave up: attempt ${attempt}: parse failed: ${msg}`
             : `attempt ${attempt}: parse failed: ${msg}`,
           ...(retryOf !== undefined ? { retryOf } : {}),
+          ...(facts ? { outcome: facts } : {}),
         });
       }
     } catch (err) {
       // Transport/adapter error — retryable execution error; give up on the last.
       const msg = errorText(err);
+      // SEAM-REPORT §1.4: the thrown error may carry flat outcome facts;
+      // use them only when they parse as facts (outcomeOf guards).
+      const facts = outcomeOf(err);
       // no raw output to count: estimate from the prompt side only
       // (estimateUsage with an empty raw → completionTokens 0)
       const usage: Usage = estimateUsage(prompt, '');
@@ -187,7 +232,7 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
         runId: opts.runId,
         alignmentId: frozen.alignmentId,
         debit,
-        credit: { error: msg, usage },
+        credit: { error: msg, ...facts, usage },
         verdict: 'failed',
         verdictKind: last ? 'escalated' : 'execution-error',
         escalated: last,
@@ -195,6 +240,7 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
           ? `gave up: attempt ${attempt}: adapter error: ${msg}`
           : `attempt ${attempt}: adapter error: ${msg}`,
         ...(retryOf !== undefined ? { retryOf } : {}),
+        ...(facts ? { outcome: facts } : {}),
       });
     }
 

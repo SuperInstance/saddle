@@ -164,6 +164,63 @@ test('resolveVerdictKind: legacy entries classified from verdict/escalated/credi
   assert.equal(resolveVerdictKind(ledgerEntryWith({ verdict: 'failed', credit: 'judge says no' })), 'judgment-fail');
 });
 
+// ---------------------------------------------------------------------------
+// v4: outcome facts — orthogonal process-level truths (SEAM-REPORT §1.4)
+// ---------------------------------------------------------------------------
+
+test('v4 outcome facts: stamped entries parse, chain, and verify', async () => {
+  const { ledger } = tmpLedger();
+  ledger.append({ cellId: 'c', runId: 'r', alignmentId: 'al', debit: 1, credit: {}, verdict: 'worked', escalated: false });
+  const mid = ledger.append({
+    cellId: 'c', runId: 'r', alignmentId: 'al', debit: 2, credit: { pass: false },
+    verdict: 'failed', verdictKind: 'judgment-fail', escalated: false,
+    outcome: { timedOut: true, exitCode: 0 },
+  });
+  ledger.append({ cellId: 'c', runId: 'r', alignmentId: 'al', debit: 3, credit: {}, verdict: 'worked', escalated: false });
+  assert.equal(mid.seq, 2);
+
+  const entries: LedgerEntry[] = [];
+  for await (const e of ledger.stream()) entries.push(e);
+  // both facts co-present — timedOut AND exitCode 0, the §1.4 signature case
+  assert.deepEqual(entries[1]?.outcome, { timedOut: true, exitCode: 0 });
+
+  const tail = ledger.tailEntry();
+  assert.deepEqual(tail, entries[2], 'tailEntry round-trips the stored object');
+
+  const v = await ledger.verify();
+  assert.equal(v.ok, true);
+  assert.equal(v.checked, 3);
+});
+
+test('outcome participates in the entry hash (tamper evidence)', async () => {
+  const { ledger } = tmpLedger();
+  ledger.append({ cellId: 'c', runId: 'r', alignmentId: 'al', debit: {}, credit: {}, verdict: 'worked', escalated: false });
+  ledger.append({
+    cellId: 'c', runId: 'r', alignmentId: 'al', debit: {}, credit: {},
+    verdict: 'failed', escalated: false, outcome: { timedOut: true, exitCode: 0 },
+  });
+  // cook the books: forge the outcome on line 2 WITHOUT rehashing
+  const lines = fs.readFileSync(ledger.filePath, 'utf8').split('\n');
+  const forged = JSON.parse(lines[1] ?? '');
+  forged.outcome = { timedOut: false, exitCode: 1, signal: 9 };
+  lines[1] = JSON.stringify(forged);
+  fs.writeFileSync(ledger.filePath, lines.join('\n'));
+  const result = await ledger.verify();
+  assert.equal(result.ok, false);
+  assert.equal(result.badSeq, 2);
+  assert.match(result.reason ?? '', /hash mismatch/);
+});
+
+test('pre-v4 entries (no outcome) still verify', async () => {
+  const { ledger } = tmpLedger();
+  const e = ledger.append({ cellId: 'c', runId: 'r', alignmentId: 'al', debit: 1, credit: 2, verdict: 'worked', escalated: false, verdictKind: 'worked' });
+  assert.equal('outcome' in e, false, 'no outcome key at all — not undefined');
+  const tail = ledger.tailEntry();
+  assert.equal('outcome' in (tail ?? {}), false);
+  const v = await ledger.verify();
+  assert.equal(v.ok, true);
+});
+
 /** Build a minimal entry shaped like a ledger row (credit value gets JSON-encoded). */
 function ledgerEntryWith(over: Partial<NewEntry> & { credit?: unknown }): LedgerEntry {
   const base: NewEntry = { cellId: 'c', runId: 'r', alignmentId: 'al', debit: {}, credit: {}, verdict: 'failed', escalated: false };

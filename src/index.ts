@@ -9,7 +9,7 @@
 
 export { Ledger, entryHash, resolveVerdictKind } from './ledger.ts';
 export { WorkflowValidationError } from './cells.ts';
-export type { LedgerEntry, NewEntry, Verdict, VerdictKind, VerifyResult } from './ledger.ts';
+export type { LedgerEntry, NewEntry, OutcomeFact, Verdict, VerdictKind, VerifyResult } from './ledger.ts';
 
 export { freeze, thaw, listFrozen, verifyFrozen, manifestHash } from './frozens.ts';
 export type { AlignmentDraft, FrozenState, FilterSpec, FilterKind } from './frozens.ts';
