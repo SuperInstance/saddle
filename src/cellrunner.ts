@@ -36,6 +36,8 @@ import { thaw } from './frozens.ts';
 import { Ledger } from './ledger.ts';
 import type { LedgerEntry, OutcomeFact, Verdict, VerdictKind } from './ledger.ts';
 import type { GrantLedger } from './grants.ts';
+import { canonicalResultOf } from './canonical.ts';
+import type { CanonicalResult } from './canonical.ts';
 
 /** What a cell sends to whatever actually talks to a model. */
 export interface CellRequest {
@@ -90,6 +92,10 @@ export interface RunCellOptions {
 export interface RunCellResult {
   entries: LedgerEntry[];
   final: LedgerEntry;
+  /** v4: the ONE canonical projection of the final entry (SEAM-REPORT §1.1) —
+   *  what replay derives is provably the same object shape as what the run
+   *  computed. */
+  canonical: CanonicalResult;
 }
 
 /**
@@ -258,10 +264,11 @@ export async function runCell(opts: RunCellOptions): Promise<RunCellResult> {
     entries.push(entry);
     if (entry.verdictKind !== 'execution-error') {
       // judgment (worked/judgment-fail) or give-up (escalated): the run is over
-      return { entries, final: entry };
+      return { entries, final: entry, canonical: canonicalResultOf(entry) };
     }
   }
 
   // Unreachable: the final attempt always returns (judgment or give-up).
-  return { entries, final: entries[entries.length - 1]! };
+  const lastEntry = entries[entries.length - 1]!;
+  return { entries, final: lastEntry, canonical: canonicalResultOf(lastEntry) };
 }

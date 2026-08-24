@@ -31,6 +31,7 @@ import { Ledger } from './ledger.ts';
 import type { LedgerEntry } from './ledger.ts';
 import { resolveVerdictKind } from './ledger.ts';
 import { thaw } from './frozens.ts';
+import { canonicalResultOf } from './canonical.ts';
 
 export const EARNED_KEEP_THRESHOLD = 0.75; // keep ratio an alignment must clear
 
@@ -133,25 +134,10 @@ export function suggestForAlignment(a: AlignmentStat): AlignmentSuggestion {
   return { action: 'keep', reason: 'performing within tolerance' };
 }
 
-/** Read `usage` off a credit JSON string; null when absent/unreadable. */
+/** Read `usage` off an entry via the v4 canonical-value seam (SEAM-REPORT
+ *  §1.1): one derivation, two consumers. null when absent/unreadable. */
 function usageOf(entry: LedgerEntry): { promptTokens: number; completionTokens: number; totalTokens: number; estimated: boolean } | null {
-  try {
-    const credit = JSON.parse(entry.credit) as unknown;
-    if (credit === null || typeof credit !== 'object' || Array.isArray(credit)) return null;
-    const usage = (credit as Record<string, unknown>).usage;
-    if (usage === null || typeof usage !== 'object' || Array.isArray(usage)) return null;
-    const u = usage as Record<string, unknown>;
-    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-    if (u.promptTokens === undefined && u.completionTokens === undefined && u.totalTokens === undefined) return null;
-    return {
-      promptTokens: num(u.promptTokens),
-      completionTokens: num(u.completionTokens),
-      totalTokens: num(u.totalTokens),
-      estimated: u.estimated === true,
-    };
-  } catch {
-    return null;
-  }
+  return canonicalResultOf(entry).usage ?? null;
 }
 
 /**

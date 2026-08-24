@@ -67,6 +67,9 @@ export type {
 
 export { canonicalJson, fnv1a64, hashValue } from './hash.ts';
 
+export { canonicalResultOf, projectCard, projectLine, replayCanonical } from './canonical.ts';
+export type { CanonicalResult, LedgerCard } from './canonical.ts';
+
 // cellrunner — run ONE pinned cell (frozen alignment) against an injected
 // adapter. Companion to CellRunner (workflows of many cells): different seam
 // on purpose — CellAdapter returns RAW transport output + parseCredit decides
