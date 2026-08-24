@@ -48,6 +48,18 @@ export type Verdict = 'worked' | 'failed';
  */
 export type VerdictKind = 'worked' | 'judgment-fail' | 'execution-error' | 'escalated';
 
+/**
+ * v4 orthogonal outcome facts (SEAM-REPORT §1.4): process-level facts about
+ * HOW an attempt ended, reported flat and independent — a process can time
+ * out AND exit 0. Absent on all pre-v4 entries (they parse and hash-verify
+ * unchanged). Never nested inside error strings.
+ */
+export interface OutcomeFact {
+  timedOut?: boolean;
+  signal?: number;
+  exitCode?: number;
+}
+
 export interface LedgerEntry {
   seq: number;
   ts: string;
@@ -69,6 +81,8 @@ export interface LedgerEntry {
   note?: string;
   /** seq of the entry this one retried; retries are new entries, never rewrites */
   retryOf?: number;
+  /** v4 orthogonal process facts (see OutcomeFact); absent on pre-v4 entries */
+  outcome?: OutcomeFact;
   /** hash of the previous entry ('' for the genesis entry) */
   prevHash: string;
   /** FNV-1a64 of this entry minus the `hash` field */
@@ -90,6 +104,8 @@ export interface NewEntry {
   verdictKind?: VerdictKind;
   note?: string;
   retryOf?: number;
+  /** v4 outcome facts; omit when writing pre-v4-shape entries on purpose */
+  outcome?: OutcomeFact;
 }
 
 export interface VerifyResult {
@@ -165,6 +181,7 @@ export class Ledger {
       ...(input.verdictKind !== undefined ? { verdictKind: input.verdictKind } : {}),
       ...(input.note !== undefined ? { note: input.note } : {}),
       ...(input.retryOf !== undefined ? { retryOf: input.retryOf } : {}),
+      ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
       prevHash: last ? last.hash : '',
     };
     const full: LedgerEntry = { ...entry, hash: entryHash(entry) };

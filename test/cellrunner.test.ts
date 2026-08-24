@@ -540,3 +540,117 @@ test('estimateUsage: chars/4 per side, ceiled, summed', () => {
   assert.equal(estimateUsage(prompt, '').completionTokens, 0);
   assert.equal(estimateUsage(prompt, '').promptTokens, 38);
 });
+
+// ---------------------------------------------------------------------------
+// v4: orthogonal outcome facts (SEAM-REPORT §1.4) — flat on the credit and
+// the entry, never folded into the error string, never flipping the kind
+// ---------------------------------------------------------------------------
+
+test('cellrunner v4: flat outcome facts ride the credit and the entry, not the error string', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    // adapter reports the §1.4 signature case: timed out AND exited 0
+    const adapter: CellAdapter = {
+      name: 'subprocess-mock',
+      async call() {
+        return {
+          raw: JSON.stringify({ pass: false, reason: 'out of voice' }),
+          latencyMs: 9,
+          outcome: { timedOut: true, exitCode: 0 },
+        };
+      },
+    };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => {
+        const parsed = JSON.parse(raw);
+        return { credit: parsed, verdict: (parsed.pass ? 'worked' : 'failed') as Verdict };
+      },
+      ledger, adapter, maxAttempts: 3,
+    });
+
+    // facts never flip the kind: a completed parse with timedOut=true is
+    // STILL a completed judgment — parsed kind, NOT downgraded
+    assert.strictEqual(result.entries.length, 1);
+    assert.strictEqual(result.final.verdictKind, 'judgment-fail');
+
+    const credit = JSON.parse(result.final.credit);
+    assert.strictEqual(credit.pass, false);
+    assert.strictEqual(credit.timedOut, true, 'timedOut rides flat on the credit');
+    assert.strictEqual(credit.exitCode, 0, 'exitCode rides flat on the credit');
+    assert.ok(!('outcome' in credit), 'no nested outcome blob on the credit');
+    assert.deepStrictEqual(result.final.outcome, { timedOut: true, exitCode: 0 });
+
+    assert.ok(await ledger.verify().then((v) => v.ok));
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v4: adapter-throw carries facts flat', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    const adapter: CellAdapter = {
+      name: 'kill-mock',
+      async call() {
+        const err = new Error('child killed') as Error & { outcome?: unknown };
+        err.outcome = { signal: 15 };
+        throw err;
+      },
+    };
+
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => ({ credit: JSON.parse(raw), verdict: 'worked' as Verdict }),
+      ledger, adapter, maxAttempts: 2,
+    });
+
+    assert.strictEqual(result.entries.length, 2);
+    for (const e of result.entries) {
+      const credit = JSON.parse(e.credit);
+      assert.ok(credit.error, 'error string still present');
+      assert.strictEqual(credit.signal, 15, 'signal is a flat sibling of the error string');
+      assert.deepStrictEqual(e.outcome, { signal: 15 });
+    }
+    assert.ok(await ledger.verify().then((v) => v.ok));
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('cellrunner v4: facts-free adapters behave exactly as before', async () => {
+  const tmpDir = makeTmpDir();
+  try {
+    const frozenDir = path.join(tmpDir, 'frozens');
+    const frozen = freeze(frozenDir, testDraft);
+    const ledger = new Ledger(path.join(tmpDir, 'ledger.jsonl'));
+
+    const adapter = makeMockAdapter('success');
+    const result = await runCell({
+      frozenDir, alignmentId: frozen.alignmentId, cellId: 'qc', runId: 'run-1',
+      input: {}, buildUserPrompt: () => 'judge this',
+      parseCredit: (raw) => ({ credit: JSON.parse(raw), verdict: 'worked' as Verdict }),
+      ledger, adapter,
+    });
+
+    assert.strictEqual(result.final.verdictKind, 'worked');
+    assert.ok(!('outcome' in result.final), 'no outcome key on the entry');
+    const credit = JSON.parse(result.final.credit);
+    assert.ok(!('outcome' in credit), 'no outcome key on the credit');
+    assert.ok(!('timedOut' in credit) && !('signal' in credit) && !('exitCode' in credit));
+    assert.ok(await ledger.verify().then((v) => v.ok));
+  } finally {
+    cleanup(tmpDir);
+  }
+});
