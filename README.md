@@ -265,6 +265,8 @@ docs carry the doctrine:
 - [docs/RIDER-TAXONOMY.md](docs/RIDER-TAXONOMY.md) — the rider taxonomy: every
   rider type an alignment archetype, with frozen-state template stubs in
   [docs/templates/](docs/templates/)
+- [docs/verification.md](docs/verification.md) — how this project decides a
+  check actually checked something, rather than just reporting green
 - [The Hermit Crab and the Working Dog](https://github.com/SuperInstance/superinstance/blob/main/THE_HERMIT_CRAB_AND_THE_WORKING_DOG.md)
   — the philosophy this serves
 - [superinstance/workshop/kennel](https://github.com/SuperInstance/superinstance/tree/main/workshop/kennel)
@@ -280,4 +282,4 @@ docs carry the doctrine:
 
 ## License
 
-Apache-2.0 — same as the rest of the pincher/quilt gear.
+Apache-2.0 — same as the rest of the pincher/quilt gear. See [LICENSE](./LICENSE).
